@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>RIP · Cuenta de cobro (Docentes)</title>
+  <meta name="theme-color" content="#f7f8fc" />
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="header">
+    <div class="wrap topbar">
+      <div>
+        <h1>RIP · Cuenta de cobro (Docentes)</h1>
+        <p class="sub">
+          Categorías = <b>P</b> · Cantidad = <b>Suma(O)</b> · Agrupa por Docente (H) + Categoría (P)
+        </p>
+      </div>
+      <div class="status" title="Estado">
+        <span id="statusDot" class="dot"></span>
+        <span id="estado">Sin cargar</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="card">
+      <div class="grid">
+        <div>
+          <label>Mes (opcional)</label>
+          <input id="mes" type="month">
+          <div class="hint">Si eliges mes, ajusta automáticamente el rango de fechas.</div>
+        </div>
+
+        <div>
+          <label>Desde</label>
+          <input id="desde" type="date">
+        </div>
+
+        <div>
+          <label>Hasta</label>
+          <input id="hasta" type="date">
+        </div>
+
+        <div class="span2">
+          <label>Docentes (multi)</label>
+          <div class="multiSelect" id="docentesBox">
+            <button class="multiBtn" id="docentesBtn" type="button">
+              <span id="docentesLabel">Todos</span>
+              <span class="chev">▾</span>
+            </button>
+            <div class="multiPanel" id="docentesPanel" hidden>
+              <div class="multiTop">
+                <input id="docentesSearch" type="text" placeholder="Buscar docente…">
+                <button class="linkBtn" id="docentesAll" type="button">Todos</button>
+                <button class="linkBtn" id="docentesNone" type="button">Ninguno</button>
+              </div>
+              <div class="multiList" id="docentesList"></div>
+            </div>
+          </div>
+          <div class="hint">Selecciona varios con chulito ✅</div>
+        </div>
+
+        <button id="btnCargar" class="primary">Cargar & Calcular</button>
+        <button id="btnExport" class="ghost">Export CSV</button>
+      </div>
+
+      <hr class="hr">
+
+      <div class="kpis">
+        <div class="kpi">
+          <div class="kpiT">Filas leídas</div>
+          <div class="kpiV" id="kpiFilas">0</div>
+        </div>
+        <div class="kpi">
+          <div class="kpiT">Filas filtradas</div>
+          <div class="kpiV" id="kpiFiltradas">0</div>
+        </div>
+        <div class="kpi">
+          <div class="kpiT">Total cantidad (ΣO)</div>
+          <div class="kpiV" id="kpiCantidad">0</div>
+        </div>
+        <div class="kpi">
+          <div class="kpiT">Total cuenta de cobro</div>
+          <div class="kpiV" id="kpiValor">$0</div>
+        </div>
+      </div>
+
+      <div class="note">
+        <b>Importante:</b> si en tu RIP la columna <b>O</b> tiene texto raro (o viene vacía),
+        la suma no va a salir. Aquí la app convierte O a número (con coma o punto) y si no puede, asume 0.
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="rowBetween">
+        <div>
+          <div class="title">Resumen por docente</div>
+          <div class="sub2">Columnas = categorías detectadas en P. Cada celda = suma de O.</div>
+        </div>
+        <div class="rowGap">
+          <button class="ghost" id="btnVerTarifas" type="button">Tarifas</button>
+        </div>
+      </div>
+
+      <div class="tableWrap">
+        <table id="tabla">
+          <thead></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+
+      <dialog id="dlgTarifas" class="dlg">
+        <form method="dialog" class="dlgCard">
+          <div class="dlgHead">
+            <div>
+              <div class="dlgTitle">Tarifas por categoría (P)</div>
+              <div class="dlgSub">Clave = texto exacto de P (normalizado a MAYÚSCULAS). Valor = COP por unidad (O).</div>
+            </div>
+            <button class="x" value="cancel" aria-label="Cerrar">✕</button>
+          </div>
+
+          <label>JSON de tarifas</label>
+          <textarea id="tarifasJson" spellcheck="false"></textarea>
+
+          <div class="dlgBtns">
+            <button id="btnGuardarTarifas" class="primary" value="ok">Guardar</button>
+            <button id="btnResetTarifas" class="danger" type="button">Reset demo</button>
+          </div>
+
+          <p class="dlgHint">
+            Si una categoría no tiene tarifa, se asume 0. O sea, trabajar gratis. Divino.
+          </p>
+        </form>
+      </dialog>
+    </section>
+  </main>
+<dialog id="dlgDetalle" class="dlg">
+  <form method="dialog" class="dlgCard">
+    <div class="dlgHead">
+      <div>
+        <div class="dlgTitle" id="detalleTitle">Detalle</div>
+        <div class="dlgSub" id="detalleSub">Fechas</div>
+      </div>
+      <button class="x" value="cancel" aria-label="Cerrar">✕</button>
+    </div>
+
+    <div class="note" id="detalleResumen" style="margin-top:0"></div>
+
+    <div class="tableWrap" style="margin-top:10px; min-width:auto;">
+      <table style="min-width: 520px;">
+  <thead>
+  <tr>
+    <th>Nombre</th>
+    <th>Fecha</th>
+    <th style="text-align:right;">Cantidad (O)</th>
+  </tr>
+</thead>
+        <tbody id="detalleBody"></tbody>
+        <tfoot>
+          <tr>
+            <td><strong>Total</strong></td>
+            <td style="text-align:right;"><strong id="detalleTotal">0</strong></td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </form>
+</dialog>
+  <script src="./config.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>
