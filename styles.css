@@ -251,12 +251,6 @@ tfoot td{font-weight:900;background:#fbfbfe}
   border-radius:12px;
   padding:8px 10px;
 }
-textarea{
-  min-height:200px;
-  resize:vertical;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono","Courier New", monospace;
-  font-size:12px;
-}
 .dlgBtns{display:flex;gap:10px;justify-content:flex-end;margin-top:10px;flex-wrap:wrap}
 .dlgHint{margin:10px 0 0;color:var(--muted);font-size:12px;line-height:1.45}
 td.clickable{
@@ -266,4 +260,42 @@ td.clickable{
 }
 td.clickable:hover{
   background: rgba(12,65,196,.06);
+}
+
+.ratesWrap{
+  margin-top:8px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  overflow:hidden;
+}
+.ratesTable{
+  width:100%;
+  min-width:auto;
+  border-collapse:collapse;
+}
+.ratesTable th,
+.ratesTable td{
+  text-align:left;
+  border-bottom:1px solid var(--line);
+  padding:8px 10px;
+}
+.ratesTable th:nth-child(2),
+.ratesTable td:nth-child(2){text-align:right}
+.ratesTable th:last-child,
+.ratesTable td:last-child{width:90px;text-align:center}
+.ratesTable tbody tr:last-child td{border-bottom:none}
+.rateInput{
+  width:100%;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:8px 10px;
+  font-size:13px;
+}
+.rateDel{
+  padding:7px 9px;
+  border-radius:10px;
+  border:1px solid rgba(185,28,28,.28);
+  color:var(--danger);
+  background:#fff;
+  font-weight:900;
 }

@@ -1,7 +1,7 @@
-/* RIP · Cuenta de cobro (Docentes)
-   Categorías = P
+﻿/* RIP Â· Cuenta de cobro (Docentes)
+   CategorÃ­as = P
    Cantidad = SUMA(O)
-   Agrupa por Docente(H) + Categoría(P)
+   Agrupa por Docente(H) + CategorÃ­a(P)
    + Click en celda => abre detalle (Nombre D, Fecha E, Cantidad O)
 
    Hardened:
@@ -52,7 +52,8 @@ const el = {
 
   btnVerTarifas: $("#btnVerTarifas"),
   dlgTarifas: $("#dlgTarifas"),
-  tarifasJson: $("#tarifasJson"),
+  tarifasBody: $("#tarifasBody"),
+  btnAgregarTarifa: $("#btnAgregarTarifa"),
   btnGuardarTarifas: $("#btnGuardarTarifas"),
   btnResetTarifas: $("#btnResetTarifas"),
 };
@@ -88,7 +89,7 @@ function norm(s) {
 function upper(s) { return norm(s).toUpperCase(); }
 
 // Clave estable para agrupar/filtrar docentes.
-// Incluye quitar tildes para evitar "José" vs "Jose".
+// Incluye quitar tildes para evitar "JosÃ©" vs "Jose".
 function keyDocente(s) {
   const t = upper(s);
   return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -113,7 +114,7 @@ function parseTSV(tsv) {
 /* ---------- Fecha ultra-tolerante ---------- */
 
 function dateFromSerial(n) {
-  // 25569 = días entre 1899-12-30 y 1970-01-01
+  // 25569 = dÃ­as entre 1899-12-30 y 1970-01-01
   const ms = (Number(n) - 25569) * 86400 * 1000;
   const d = new Date(ms);
   return isNaN(d.getTime()) ? null : d;
@@ -123,10 +124,10 @@ function parseDateFlexible(s) {
   const t0 = norm(s);
   if (!t0) return null;
 
-  // 1) Serial numérico (Sheets/Excel)
+  // 1) Serial numÃ©rico (Sheets/Excel)
   if (/^\d+(\.\d+)?$/.test(t0)) {
     const serial = Number(t0);
-    // si es un año tipo 2026 no es serial, lo ignoramos aquí
+    // si es un aÃ±o tipo 2026 no es serial, lo ignoramos aquÃ­
     if (serial > 20000 && serial < 90000) {
       const d = dateFromSerial(serial);
       if (d) return d;
@@ -182,7 +183,7 @@ function parseDateFlexible(s) {
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // 4) Último recurso: Date() nativo (ISO y similares)
+  // 4) Ãšltimo recurso: Date() nativo (ISO y similares)
   const dNative = new Date(t);
   return isNaN(dNative.getTime()) ? null : dNative;
 }
@@ -220,7 +221,7 @@ function loadTarifas() {
   if (!raw) return structuredClone(CFG.DEFAULT_TARIFAS);
   try {
     const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas inválidas");
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas invÃ¡lidas");
     return obj;
   } catch {
     return structuredClone(CFG.DEFAULT_TARIFAS);
@@ -293,10 +294,10 @@ function applyMonthToRange() {
   if (!m) return;
   const [yy, mm] = m.split("-").map(Number);
   if (!yy || !mm) return;
-  const first = new Date(yy, mm - 1, 1);
-  const lastDay = new Date(yy, mm, 0);
-  el.desde.value = ymd(first);
-  el.hasta.value = ymd(lastDay);
+  const desde = new Date(yy, mm - 2, 26);
+  const hasta = new Date(yy, mm - 1, 25);
+  el.desde.value = ymd(desde);
+  el.hasta.value = ymd(hasta);
 }
 
 function getFilters() {
@@ -320,8 +321,8 @@ function openDetalle(docenteDisplay, cat) {
 
   rows.sort((a, b) => a.fecha - b.fecha);
 
-  el.detalleTitle.textContent = `${docenteDisplay} · ${cat}`;
-  el.detalleSub.textContent = `Rango: ${last.filtros.desdeStr || "inicio"} → ${last.filtros.hastaStr || "hoy"}`;
+  el.detalleTitle.textContent = `${docenteDisplay} Â· ${cat}`;
+  el.detalleSub.textContent = `Rango: ${last.filtros.desdeStr || "inicio"} â†’ ${last.filtros.hastaStr || "hoy"}`;
 
   let total = 0;
 
@@ -337,7 +338,7 @@ function openDetalle(docenteDisplay, cat) {
   }).join("");
 
   el.detalleTotal.textContent = formatQty(total);
-  el.detalleResumen.innerHTML = `<b>${rows.length}</b> registros · <b>Total ΣO:</b> ${formatQty(total)}`;
+  el.detalleResumen.innerHTML = `<b>${rows.length}</b> registros Â· <b>Total Î£O:</b> ${formatQty(total)}`;
 
   el.dlgDetalle.showModal();
 }
@@ -410,12 +411,12 @@ function exportCSV() {
 
 async function cargarYCalcular() {
   try {
-    setStatus("Cargando RIP…", "warn");
+    setStatus("Cargando RIPâ€¦", "warn");
 
     const details = new Map();
     // key: kdoc||cat => array de { nombre, fecha: Date, qty: number }
 
-    // Diagnóstico por si vuelve el misterio
+    // DiagnÃ³stico por si vuelve el misterio
     let dropNoDoc = 0;
     let dropBadDate = 0;
     let dropOutRange = 0;
@@ -425,7 +426,7 @@ async function cargarYCalcular() {
     const tsv = await res.text();
 
     const rows = parseTSV(tsv);
-    if (rows.length < 2) throw new Error("TSV vacío o sin data.");
+    if (rows.length < 2) throw new Error("TSV vacÃ­o o sin data.");
 
     el.kpiFilas.textContent = String(rows.length - 1);
     const data = rows.slice(1);
@@ -440,7 +441,7 @@ async function cargarYCalcular() {
     }
     docentesAll = Array.from(seen.values()).sort((a, b) => a.localeCompare(b, "es"));
 
-    // normaliza selección existente
+    // normaliza selecciÃ³n existente
     if (docentesSelected && docentesSelected.size) {
       const selectedKeys = new Set(Array.from(docentesSelected).map(keyDocente));
       const rebuilt = new Set();
@@ -475,7 +476,7 @@ async function cargarYCalcular() {
       if (filtros.desde && fecha < filtros.desde) { dropOutRange++; continue; }
       if (filtros.hasta && fecha > filtros.hasta) { dropOutRange++; continue; }
 
-      // Nombre (D) = índice 3
+      // Nombre (D) = Ã­ndice 3
       const nombre = norm(r[3]);
 
       const cat = upper(r[CFG.IDX.CAT]) || "SIN_CATEGORIA";
@@ -492,7 +493,7 @@ async function cargarYCalcular() {
       if (!byDoc.has(kdoc)) byDoc.set(kdoc, { docente: docenteDisplay, cats: {}, totalQty: 0, value: 0 });
       const row = byDoc.get(kdoc);
 
-      // preferimos el display más completo/largo
+      // preferimos el display mÃ¡s completo/largo
       if (docenteDisplay.length > row.docente.length) row.docente = docenteDisplay;
 
       row.cats[cat] = (row.cats[cat] || 0) + qty;
@@ -534,7 +535,7 @@ async function cargarYCalcular() {
 
     console.table({ dropNoDoc, dropBadDate, dropOutRange });
 
-    setStatus("Listo ✅", "ok");
+    setStatus("Listo âœ…", "ok");
   } catch (err) {
     console.error(err);
     setStatus("Error: " + (err.message || err), "danger");
@@ -553,35 +554,70 @@ async function cargarYCalcular() {
 /* ---------- Tarifas UI ---------- */
 
 function openTarifas() {
-  el.tarifasJson.value = JSON.stringify(tarifas, null, 2);
+  renderTarifasRows();
   el.dlgTarifas.showModal();
+}
+
+function renderTarifasRows() {
+  const rows = Object.entries(tarifas)
+    .sort((a, b) => a[0].localeCompare(b[0], "es"));
+
+  if (!rows.length) {
+    addTarifaRow();
+    return;
+  }
+
+  el.tarifasBody.innerHTML = rows.map(([cat, value]) => `
+    <tr>
+      <td><input class="rateInput rateCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
+      <td><input class="rateInput rateValue" type="text" value="${Number(value || 0)}" inputmode="numeric" placeholder="0"></td>
+      <td><button class="rateDel" type="button" title="Eliminar">X</button></td>
+    </tr>
+  `).join("");
+}
+
+function addTarifaRow(cat = "", value = 0) {
+  const tr = document.createElement("tr");
+  tr.innerHTML = `
+    <td><input class="rateInput rateCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
+    <td><input class="rateInput rateValue" type="text" value="${Number(value || 0)}" inputmode="numeric" placeholder="0"></td>
+    <td><button class="rateDel" type="button" title="Eliminar">X</button></td>
+  `;
+  el.tarifasBody.appendChild(tr);
+}
+
+function parseRateValue(v) {
+  const t = norm(v).replaceAll(".", "").replace(",", ".");
+  const n = Number(t);
+  return Number.isFinite(n) ? n : 0;
 }
 
 function saveTarifasFromUI() {
   try {
-    const obj = JSON.parse(el.tarifasJson.value);
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas debe ser un objeto.");
-
     const fixed = {};
-    for (const [k, v] of Object.entries(obj)) fixed[upper(k)] = Number(v) || 0;
+    const rows = Array.from(el.tarifasBody.querySelectorAll("tr"));
+    for (const row of rows) {
+      const cat = upper(row.querySelector(".rateCat")?.value || "");
+      if (!cat) continue;
+      fixed[cat] = parseRateValue(row.querySelector(".rateValue")?.value || "0");
+    }
+
+    if (!Object.keys(fixed).length) throw new Error("Debes ingresar al menos una categoria.");
 
     tarifas = fixed;
     saveTarifas();
-    setStatus("Tarifas guardadas ✅", "ok");
+    setStatus("Tarifas guardadas âœ…", "ok");
   } catch (e) {
-    setStatus("Tarifas inválidas: " + (e.message || e), "danger");
+    setStatus("Tarifas invÃ¡lidas: " + (e.message || e), "danger");
   }
 }
-
 /* ---------- Eventos ---------- */
 
 function setup() {
   // defaults: mes actual
   const now = new Date();
-  const first = new Date(now.getFullYear(), now.getMonth(), 1);
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  el.desde.value = ymd(first);
-  el.hasta.value = ymd(lastDay);
+  el.mes.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  applyMonthToRange();
 
   setStatus("Sin cargar", "muted");
 
@@ -630,6 +666,17 @@ function setup() {
 
   el.btnVerTarifas.addEventListener("click", openTarifas);
 
+  el.btnAgregarTarifa.addEventListener("click", () => addTarifaRow());
+
+  el.tarifasBody.addEventListener("click", (ev) => {
+    const btn = ev.target.closest(".rateDel");
+    if (!btn) return;
+    const tr = btn.closest("tr");
+    if (!tr) return;
+    tr.remove();
+    if (!el.tarifasBody.querySelector("tr")) addTarifaRow();
+  });
+
   el.btnGuardarTarifas.addEventListener("click", () => {
     saveTarifasFromUI();
     if (last) cargarYCalcular();
@@ -639,9 +686,10 @@ function setup() {
     tarifas = structuredClone(CFG.DEFAULT_TARIFAS);
     saveTarifas();
     setStatus("Tarifas reseteadas (demo).", "warn");
-    if (el.dlgTarifas.open) el.tarifasJson.value = JSON.stringify(tarifas, null, 2);
+    if (el.dlgTarifas.open) renderTarifasRows();
     if (last) cargarYCalcular();
   });
 }
 
 setup();
+

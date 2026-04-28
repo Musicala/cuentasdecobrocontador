@@ -116,15 +116,24 @@
           <div class="dlgHead">
             <div>
               <div class="dlgTitle">Tarifas por categoría (P)</div>
-              <div class="dlgSub">Clave = texto exacto de P (normalizado a MAYÚSCULAS). Valor = COP por unidad (O).</div>
+              <div class="dlgSub">Configura categoria y valor en COP por unidad (O).</div>
             </div>
             <button class="x" value="cancel" aria-label="Cerrar">✕</button>
+          </div>          <div class="ratesWrap">
+            <table class="ratesTable">
+              <thead>
+                <tr>
+                  <th>Categoria</th>
+                  <th>Valor (COP)</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="tarifasBody"></tbody>
+            </table>
           </div>
 
-          <label>JSON de tarifas</label>
-          <textarea id="tarifasJson" spellcheck="false"></textarea>
-
           <div class="dlgBtns">
+            <button id="btnAgregarTarifa" class="ghost" type="button">+ Agregar categoria</button>
             <button id="btnGuardarTarifas" class="primary" value="ok">Guardar</button>
             <button id="btnResetTarifas" class="danger" type="button">Reset demo</button>
           </div>
@@ -172,3 +181,4 @@
   <script src="./app.js"></script>
 </body>
 </html>
+

@@ -23,6 +23,7 @@ window.RIP_CONFIG = {
     "MS P": 30000,
     "MS G": 30000,
     "MV P": 30000,
+    "FSA": 56000,
     "SPACES": 0
   },
 
