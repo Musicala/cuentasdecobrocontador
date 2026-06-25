@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
-  <title>RIP · Cuenta de cobro (Docentes)</title>
+  <title>Contador de Cuentas de Cobro · Musicala</title>
   <meta name="theme-color" content="#f7f8fc" />
   <link rel="stylesheet" href="./styles.css">
 </head>
@@ -11,10 +11,8 @@
   <header class="header">
     <div class="wrap topbar">
       <div>
-        <h1>RIP · Cuenta de cobro (Docentes)</h1>
-        <p class="sub">
-          Categorías = <b>P</b> · Cantidad = <b>Suma(O)</b> · Agrupa por Docente (H) + Categoría (P)
-        </p>
+        <h1>Contador de Cuentas de Cobro</h1>
+        <p class="sub">Docentes · Musicala</p>
       </div>
       <div class="status" title="Estado">
         <span id="statusDot" class="dot"></span>
@@ -30,6 +28,7 @@
           <label>Mes (opcional)</label>
           <input id="mes" type="month">
           <div class="hint">Si eliges mes, ajusta automáticamente el rango de fechas.</div>
+          <button id="btnModoRango" class="ghost" type="button" style="margin-top:8px;">Modo: 26 → 25</button>
         </div>
 
         <div>
@@ -61,8 +60,10 @@
           <div class="hint">Selecciona varios con chulito ✅</div>
         </div>
 
-        <button id="btnCargar" class="primary">Cargar & Calcular</button>
+        <button id="btnCargar" class="primary">Cargar &amp; Calcular</button>
         <button id="btnExport" class="ghost">Export CSV</button>
+        <button id="btnSeguimiento" class="ghost">Enviar a seguimiento</button>
+        <button id="btnFlujo" class="flujo">💸 Flujo de Caja</button>
       </div>
 
       <hr class="hr">
@@ -116,14 +117,15 @@
           <div class="dlgHead">
             <div>
               <div class="dlgTitle">Tarifas por categoría (P)</div>
-              <div class="dlgSub">Configura categoria y valor en COP por unidad (O).</div>
+              <div class="dlgSub">Configura categoría y valor en COP por unidad (O).</div>
             </div>
             <button class="x" value="cancel" aria-label="Cerrar">✕</button>
-          </div>          <div class="ratesWrap">
+          </div>
+          <div class="ratesWrap">
             <table class="ratesTable">
               <thead>
                 <tr>
-                  <th>Categoria</th>
+                  <th>Categoría</th>
                   <th>Valor (COP)</th>
                   <th></th>
                 </tr>
@@ -133,7 +135,7 @@
           </div>
 
           <div class="dlgBtns">
-            <button id="btnAgregarTarifa" class="ghost" type="button">+ Agregar categoria</button>
+            <button id="btnAgregarTarifa" class="ghost" type="button">+ Agregar categoría</button>
             <button id="btnGuardarTarifas" class="primary" value="ok">Guardar</button>
             <button id="btnResetTarifas" class="danger" type="button">Reset demo</button>
           </div>
@@ -145,40 +147,91 @@
       </dialog>
     </section>
   </main>
-<dialog id="dlgDetalle" class="dlg">
-  <form method="dialog" class="dlgCard">
-    <div class="dlgHead">
-      <div>
-        <div class="dlgTitle" id="detalleTitle">Detalle</div>
-        <div class="dlgSub" id="detalleSub">Fechas</div>
+
+  <dialog id="dlgDetalle" class="dlg">
+    <form method="dialog" class="dlgCard">
+      <div class="dlgHead">
+        <div>
+          <div class="dlgTitle" id="detalleTitle">Detalle</div>
+          <div class="dlgSub" id="detalleSub">Fechas</div>
+        </div>
+        <button class="x" value="cancel" aria-label="Cerrar">✕</button>
       </div>
-      <button class="x" value="cancel" aria-label="Cerrar">✕</button>
-    </div>
 
-    <div class="note" id="detalleResumen" style="margin-top:0"></div>
+      <div class="note" id="detalleResumen" style="margin-top:0"></div>
 
-    <div class="tableWrap" style="margin-top:10px; min-width:auto;">
-      <table style="min-width: 520px;">
-  <thead>
-  <tr>
-    <th>Nombre</th>
-    <th>Fecha</th>
-    <th style="text-align:right;">Cantidad (O)</th>
-  </tr>
-</thead>
-        <tbody id="detalleBody"></tbody>
-        <tfoot>
-          <tr>
-            <td><strong>Total</strong></td>
-            <td style="text-align:right;"><strong id="detalleTotal">0</strong></td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
-  </form>
-</dialog>
+      <div class="tableWrap" style="margin-top:10px; min-width:auto;">
+        <table style="min-width:520px;">
+          <thead>
+            <tr>
+              <th>Nombre</th>
+              <th>Fecha</th>
+              <th style="text-align:right;">Cantidad (O)</th>
+            </tr>
+          </thead>
+          <tbody id="detalleBody"></tbody>
+          <tfoot>
+            <tr>
+              <td><strong>Total</strong></td>
+              <td style="text-align:right;"><strong id="detalleTotal">0</strong></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="dlgFlujo" class="dlg">
+    <form method="dialog" class="dlgCard">
+      <div class="dlgHead">
+        <div>
+          <div class="dlgTitle" id="flujoTitle">Enviar a Flujo de Caja</div>
+          <div class="dlgSub" id="flujoSub">Prestación de servicios · Docentes</div>
+        </div>
+        <button class="x" value="cancel" aria-label="Cerrar">✕</button>
+      </div>
+
+      <div class="note" id="flujoNote">
+        Se guardarán los valores de cuenta de cobro en <b>flujo-de-caja-musicala</b> como prestaciones pendientes de pago.
+        Los registros ya existentes para ese mes <b>no se sobrescriben</b> a menos que elijas reemplazarlos.
+      </div>
+
+      <div class="flujoStatusBar" id="flujoStatusBar" hidden>
+        <span id="flujoStatusTxt"></span>
+      </div>
+
+      <div class="tableWrap" style="margin-top:14px; min-width:auto;">
+        <table style="min-width:420px;">
+          <thead>
+            <tr>
+              <th style="text-align:left;">Docente</th>
+              <th style="text-align:right;">Valor cuenta de cobro</th>
+              <th style="text-align:center;">Estado</th>
+            </tr>
+          </thead>
+          <tbody id="flujoBody"></tbody>
+        </table>
+      </div>
+
+      <div class="flujoOpts" id="flujoOpts" hidden>
+        <label class="flujoCheck">
+          <input type="checkbox" id="flujoReemplazar">
+          <span>Reemplazar registros que ya existen</span>
+        </label>
+      </div>
+
+      <div class="dlgBtns">
+        <button class="ghost" id="flujoComprobar" type="button">🔍 Comprobar</button>
+        <button class="primary" id="flujoGuardar" type="button" disabled>💾 Guardar en Flujo</button>
+        <button class="ghost" value="cancel">Cancelar</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore-compat.js"></script>
   <script src="./config.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
-

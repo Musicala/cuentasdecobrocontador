@@ -1,8 +1,32 @@
 // CONFIG RIP · Cuenta de cobro (Docentes)
 
 window.RIP_CONFIG = {
-  // TSV pegado y oculto (interno)
-  TSV_URL: "https://docs.google.com/spreadsheets/d/e/2PACX-1vREJFkqvhXwjBNPCQXTg4pHXUplygJU1ZZG6-xgOeAJ2ifnEMHmuoDJKwQIpxVfGfCrmfmNCS_8RHTc/pub?gid=1810443337&single=true&output=tsv",
+
+  FLUJO_CONFIG: {
+    apiKey: "AIzaSyBnd0yBKhBcEyS5XX7BO6WqT9mRET1zJio",
+    authDomain: "flujo-de-caja-musicala.firebaseapp.com",
+    projectId: "flujo-de-caja-musicala",
+    storageBucket: "flujo-de-caja-musicala.firebasestorage.app",
+    messagingSenderId: "998009800481",
+    appId: "1:998009800481:web:3d36e4b579417657ada060"
+  },
+
+  FLUJO_COLLECTION: "seguimiento_egresos",
+  FIREBASE_CONFIG: {
+    apiKey: "AIzaSyCaCizVkfWdx97LROV7PYQbFXLPMpxynBg",
+    authDomain: "rip-musicala.firebaseapp.com",
+    projectId: "rip-musicala",
+    storageBucket: "rip-musicala.firebasestorage.app",
+    messagingSenderId: "401885071105",
+    appId: "1:401885071105:web:6bb9b6867d7d81fdec3d00"
+  },
+
+  // Coleccion donde quedó importado el TSV.
+  // La app acepta documentos guardados como:
+  // - { row: [...] } o { cells: [...] }
+  // - campos por letra: { D, E, H, O, P }
+  // - campos por nombre: { nombre, fecha, docente, cantidad, categoria }
+  FIRESTORE_COLLECTION: "registro",
 
   // Columnas según tu regla:
   // E = Fecha

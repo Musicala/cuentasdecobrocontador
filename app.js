@@ -1,7 +1,7 @@
-﻿/* RIP Â· Cuenta de cobro (Docentes)
-   CategorÃ­as = P
+﻿/* RIP · Cuenta de cobro (Docentes)
+   Categorías = P
    Cantidad = SUMA(O)
-   Agrupa por Docente(H) + CategorÃ­a(P)
+   Agrupa por Docente(H) + Categoría(P)
    + Click en celda => abre detalle (Nombre D, Fecha E, Cantidad O)
 
    Hardened:
@@ -18,6 +18,7 @@ const el = {
   dot: $("#statusDot"),
 
   mes: $("#mes"),
+  btnModoRango: $("#btnModoRango"),
   desde: $("#desde"),
   hasta: $("#hasta"),
 
@@ -39,6 +40,20 @@ const el = {
 
   btnCargar: $("#btnCargar"),
   btnExport: $("#btnExport"),
+  btnSeguimiento: $("#btnSeguimiento"),
+  btnFlujo: $("#btnFlujo"),
+
+  dlgFlujo: $("#dlgFlujo"),
+  flujoTitle: $("#flujoTitle"),
+  flujoSub: $("#flujoSub"),
+  flujoNote: $("#flujoNote"),
+  flujoStatusBar: $("#flujoStatusBar"),
+  flujoStatusTxt: $("#flujoStatusTxt"),
+  flujoBody: $("#flujoBody"),
+  flujoOpts: $("#flujoOpts"),
+  flujoReemplazar: $("#flujoReemplazar"),
+  flujoComprobar: $("#flujoComprobar"),
+  flujoGuardar: $("#flujoGuardar"),
 
   kpiFilas: $("#kpiFilas"),
   kpiFiltradas: $("#kpiFiltradas"),
@@ -60,6 +75,7 @@ const el = {
 
 let tarifas = loadTarifas();
 let last = null; // { out, cats, totals, filtros, details }
+let modoRango = "26_25"; // "26_25" | "1_fin"
 
 /* ---------- UI status ---------- */
 
@@ -89,7 +105,7 @@ function norm(s) {
 function upper(s) { return norm(s).toUpperCase(); }
 
 // Clave estable para agrupar/filtrar docentes.
-// Incluye quitar tildes para evitar "JosÃ©" vs "Jose".
+// Incluye quitar tildes para evitar "José" vs "Jose".
 function keyDocente(s) {
   const t = upper(s);
   return t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -104,30 +120,284 @@ function escapeHtml(s) {
     .replaceAll("'", "&#039;");
 }
 
-/* ---------- TSV ---------- */
+/* ---------- Datos ---------- */
 
-function parseTSV(tsv) {
-  const lines = tsv.replace(/\r/g, "").split("\n").filter(l => l !== "");
-  return lines.map(l => l.split("\t"));
+let firebaseApp = null;
+let firestoreDb = null;
+let firestoreUnsubscribe = null;
+let firestoreDocsById = new Map();
+let firestoreInitialLoad = null;
+let firestoreLoaded = false;
+let firestoreQueryKey = "";
+let autoLoadStarted = false;
+
+function initFirebase() {
+  if (!window.firebase) {
+    throw new Error("Firebase SDK no cargo. Revisa tu conexion a internet.");
+  }
+  if (!firebaseApp) {
+    firebaseApp = firebase.apps?.length ? firebase.app() : firebase.initializeApp(CFG.FIREBASE_CONFIG);
+    firestoreDb = firebase.firestore();
+  }
+  return firestoreDb;
+}
+
+function clearCalculatedView() {
+  el.thead.innerHTML = "";
+  el.tbody.innerHTML = "";
+  el.tfoot.innerHTML = "";
+
+  el.kpiFilas.textContent = "0";
+  el.kpiFiltradas.textContent = "0";
+  el.kpiCantidad.textContent = "0";
+  el.kpiValor.textContent = money(0);
+}
+
+function fieldFirst(obj, names) {
+  for (const name of names) {
+    if (obj?.[name] !== undefined && obj?.[name] !== null) return obj[name];
+  }
+  return "";
+}
+
+function firestoreValueToCell(value) {
+  if (value?.toDate && typeof value.toDate === "function") return value.toDate();
+  if (value && typeof value === "object" && Number.isFinite(value.seconds)) {
+    return new Date(value.seconds * 1000);
+  }
+  return value;
+}
+
+function firestoreQty(obj) {
+  const explicitQty = fieldFirst(obj, ["O", "o", "cantidad", "Cantidad", "cant", "Cant"]);
+  if (explicitQty !== "") return explicitQty;
+
+  const movimiento = fieldFirst(obj, ["movimiento", "Movimiento"]);
+  const n = Number(movimiento);
+  if (Number.isFinite(n) && n !== 0) return Math.abs(n);
+
+  return 1;
+}
+
+const USELESS_CLASIF = /^(NO\s*CLASIF|SIN\s*CATEG|SIN\s*CLASIF|NO\s*CATEG)/;
+
+function serviceBaseCategory(obj) {
+  const clasifRaw = upper(norm(fieldFirst(obj, ["L", "l", "clasificacion", "clasificación", "clasifFinal", "clasif"])));
+  const servicioRaw = upper(norm(fieldFirst(obj, ["servicio", "Servicio", "categoria", "Categoria", "F", "f"])));
+  const key = (!clasifRaw || USELESS_CLASIF.test(clasifRaw)) ? servicioRaw : clasifRaw;
+
+  if (!key) return "";
+  if (key === "TV") return "TV";
+  if (key.startsWith("MV:")) return "MV P";
+  if (key.startsWith("MH:")) return "MH P";
+  if (key.startsWith("MS:")) return "MS P";
+  if (key.startsWith("ME:") || key.includes("MUSICALA ESPACIOS")) return "MS P";
+  if (key.includes("MUSICALA VIRTUAL") || key.startsWith("MV")) return /\bMV\s*G\b|GRUP/.test(key) ? "MV G" : "MV P";
+  if (key.includes("MUSICALA HOGAR") || key.startsWith("MH")) return /\bMH\s*G\b|GRUP/.test(key) ? "MH G" : "MH P";
+  if (key.includes("MUSICALA SEDE") || key.startsWith("MS")) return /\bMS\s*G\b|GRUP/.test(key) ? "MS G" : "MS P";
+  if (key.includes("SPACES")) return "SPACES";
+  if (key.includes("TALLER")) return "TALLER";
+  if (key.includes("ENSAMBLE") || key.includes("ENSEMBLE")) return "ENSAMBLE";
+  return key;
+}
+
+function finalCategory(obj, participantCount = 1) {
+  const tipo = upper(fieldFirst(obj, ["O", "o", "tipo", "Tipo"]));
+  const servicio = norm(fieldFirst(obj, ["F", "f", "servicio", "Servicio", "categoria", "Categoria"]));
+  const servicioKey = upper(servicio);
+
+  if (tipo === "PAGO") {
+    if (servicioKey.includes("MUSICALA VIRTUAL") || servicioKey.startsWith("MV")) return servicioKey.includes(" G") ? "MV G" : "MV P";
+    if (servicioKey.includes("MUSICALA HOGAR") || servicioKey.startsWith("MH")) return servicioKey.includes(" G") ? "MH G" : "MH P";
+    if (servicioKey.includes("MUSICALA SEDE") || servicioKey.startsWith("MS")) return servicioKey.includes(" G") ? "MS G" : "MS P";
+    if (servicioKey.includes("SPACES")) return "SPACES";
+    if (servicioKey.includes("TALLER")) return participantCount > 1 ? "MS G" : "MS P";
+    if (servicioKey.includes("ENSAMBLE") || servicioKey.includes("ENSEMBLE")) return participantCount > 1 ? "MS G" : "MS P";
+    return "PAGO";
+  }
+
+  const clasif = upper(fieldFirst(obj, ["J", "j", "clasif", "clasificacion", "clasificación"]));
+  if (clasif === "MULTA") return "MULTA";
+
+  const base = serviceBaseCategory(obj);
+  if (base === "MV G" || base === "MV P") return participantCount > 1 ? "MV G" : "MV P";
+  if (base === "MH G" || base === "MH P") return participantCount > 1 ? "MH G" : "MH P";
+  if (base === "MS G" || base === "MS P") return participantCount > 1 ? "MS G" : "MS P";
+  if (base === "TALLER" || base === "ENSAMBLE") return participantCount > 1 ? "MS G" : "MS P";
+  if (base === "TV") return "MS G";
+  return base || "SIN_CATEGORIA";
+}
+
+function classCountKey(obj) {
+  const unique = norm(fieldFirst(obj, ["K", "k", "classUniqueId", "claseId", "claseKey"]));
+  if (unique) return unique;
+
+  const docente = keyDocente(fieldFirst(obj, ["profesor", "Profesor", "docente", "Docente"]));
+  const servicio = upper(fieldFirst(obj, ["servicio", "Servicio", "categoria", "Categoria"]));
+  const fecha = norm(fieldFirst(obj, ["fecha", "Fecha", "fechaRaw", "FechaRaw"]));
+  const hora = norm(fieldFirst(obj, ["hora", "Hora"]));
+  return `${fecha}|${servicio}|${hora}|${docente}`;
+}
+
+function participantCountsByClass(docs) {
+  const counts = new Map();
+  for (const obj of docs) {
+    const key = classCountKey(obj);
+    if (!key) continue;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+  return counts;
+}
+
+function isGroupCategory(cat) {
+  return ["MH G", "MS G", "MV G"].includes(upper(cat));
+}
+
+function firestoreDocToRow(obj, participantCount = 1, qtyOverride = null) {
+  const rawRow = obj.row || obj.cells || obj.valores || obj.values || obj.data;
+  if (Array.isArray(rawRow)) return rawRow.map(firestoreValueToCell);
+
+  const cat = finalCategory(obj, participantCount);
+  const row = [];
+  row[3] = firestoreValueToCell(fieldFirst(obj, ["D", "d", "nombre", "Nombre", "estudiante", "Estudiante"]));
+  row[CFG.IDX.FECHA] = firestoreValueToCell(fieldFirst(obj, ["E", "e", "fecha", "Fecha", "fechaRaw", "FechaRaw"]));
+  row[CFG.IDX.DOCENTE] = firestoreValueToCell(fieldFirst(obj, ["H", "h", "docente", "Docente", "profesor", "Profesor"]));
+  row[CFG.IDX.CANT] = firestoreValueToCell(qtyOverride ?? firestoreQty(obj));
+  row[CFG.IDX.CAT] = firestoreValueToCell(cat);
+  return row;
+}
+
+async function ensureAuth() {
+  initFirebase();
+  const auth = firebase.auth();
+  await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  if (auth.currentUser) return auth.currentUser;
+
+  const provider = new firebase.auth.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  const result = await auth.signInWithPopup(provider);
+  return result.user;
+}
+
+function watchAuthAndAutoload() {
+  initFirebase();
+  firebase.auth().onAuthStateChanged((user) => {
+    if (user) {
+      if (autoLoadStarted) return;
+      autoLoadStarted = true;
+      setStatus(`Sesión iniciada: ${user.email || "Google"}. Cargando...`, "warn");
+      cargarYCalcular();
+      return;
+    }
+
+    autoLoadStarted = false;
+    stopFirestoreListener();
+    clearCalculatedView();
+    setStatus("Inicia sesión con Cargar & Calcular.", "muted");
+  });
+}
+
+function firestoreYearsForFilters(filtros) {
+  const years = new Set();
+  if (filtros?.desde) years.add(filtros.desde.getFullYear());
+  if (filtros?.hasta) years.add(filtros.hasta.getFullYear());
+  return Array.from(years).sort();
+}
+
+function stopFirestoreListener() {
+  if (firestoreUnsubscribe) firestoreUnsubscribe();
+  firestoreUnsubscribe = null;
+  firestoreDocsById = new Map();
+  firestoreInitialLoad = null;
+  firestoreLoaded = false;
+}
+
+async function startFirestoreListener(filtros = null) {
+  await ensureAuth();
+  const db = initFirebase();
+  const collectionName = CFG.FIRESTORE_COLLECTION || "rip";
+  const years = firestoreYearsForFilters(filtros);
+  const queryKey = `${collectionName}|years:${years.join(",") || "all"}`;
+
+  if (firestoreInitialLoad && firestoreQueryKey === queryKey) return firestoreInitialLoad;
+  if (firestoreQueryKey && firestoreQueryKey !== queryKey) stopFirestoreListener();
+
+  firestoreQueryKey = queryKey;
+  let ref = db.collection(collectionName);
+  if (years.length === 1) {
+    ref = ref.where("year", "==", years[0]);
+  } else if (years.length > 1) {
+    ref = ref.where("year", "in", years);
+  }
+
+  if (firestoreInitialLoad) return firestoreInitialLoad;
+
+  firestoreInitialLoad = new Promise((resolve, reject) => {
+    firestoreUnsubscribe = ref.onSnapshot((snap) => {
+      snap.docChanges().forEach((change) => {
+        if (change.type === "removed") {
+          firestoreDocsById.delete(change.doc.id);
+        } else {
+          firestoreDocsById.set(change.doc.id, change.doc.data() || {});
+        }
+      });
+
+      firestoreLoaded = true;
+      resolve();
+
+      if (last) {
+        calcularConDatos(getFirestoreRows(), { silent: true });
+      }
+    }, (err) => {
+      firestoreInitialLoad = null;
+      reject(err);
+    });
+  });
+
+  return firestoreInitialLoad;
+}
+
+function getFirestoreRows() {
+  const docs = Array.from(firestoreDocsById.values());
+  const counts = participantCountsByClass(docs);
+  const countedGroupClasses = new Set();
+
+  return docs.map((obj) => {
+    const key = classCountKey(obj);
+    const participantCount = counts.get(key) || 1;
+    const cat = finalCategory(obj, participantCount);
+    let qty = firestoreQty(obj);
+
+    if (isGroupCategory(cat)) {
+      if (countedGroupClasses.has(key)) qty = 0;
+      else {
+        countedGroupClasses.add(key);
+        qty = 1;
+      }
+    }
+
+    return firestoreDocToRow(obj, participantCount, qty);
+  });
 }
 
 /* ---------- Fecha ultra-tolerante ---------- */
 
 function dateFromSerial(n) {
-  // 25569 = dÃ­as entre 1899-12-30 y 1970-01-01
+  // 25569 = días entre 1899-12-30 y 1970-01-01
   const ms = (Number(n) - 25569) * 86400 * 1000;
   const d = new Date(ms);
   return isNaN(d.getTime()) ? null : d;
 }
 
 function parseDateFlexible(s) {
+  if (s instanceof Date) return isNaN(s.getTime()) ? null : s;
   const t0 = norm(s);
   if (!t0) return null;
 
-  // 1) Serial numÃ©rico (Sheets/Excel)
+  // 1) Serial numérico (Sheets/Excel)
   if (/^\d+(\.\d+)?$/.test(t0)) {
     const serial = Number(t0);
-    // si es un aÃ±o tipo 2026 no es serial, lo ignoramos aquÃ­
+    // si es un año tipo 2026 no es serial, lo ignoramos aquí
     if (serial > 20000 && serial < 90000) {
       const d = dateFromSerial(serial);
       if (d) return d;
@@ -183,7 +453,7 @@ function parseDateFlexible(s) {
     return isNaN(d.getTime()) ? null : d;
   }
 
-  // 4) Ãšltimo recurso: Date() nativo (ISO y similares)
+  // 4) Último recurso: Date() nativo (ISO y similares)
   const dNative = new Date(t);
   return isNaN(dNative.getTime()) ? null : dNative;
 }
@@ -221,7 +491,7 @@ function loadTarifas() {
   if (!raw) return structuredClone(CFG.DEFAULT_TARIFAS);
   try {
     const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas invÃ¡lidas");
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas inválidas");
     return obj;
   } catch {
     return structuredClone(CFG.DEFAULT_TARIFAS);
@@ -294,10 +564,34 @@ function applyMonthToRange() {
   if (!m) return;
   const [yy, mm] = m.split("-").map(Number);
   if (!yy || !mm) return;
-  const desde = new Date(yy, mm - 2, 26);
-  const hasta = new Date(yy, mm - 1, 25);
+  let desde;
+  let hasta;
+  if (modoRango === "1_fin") {
+    desde = new Date(yy, mm - 1, 1);
+    hasta = new Date(yy, mm, 0);
+  } else {
+    desde = new Date(yy, mm - 2, 26);
+    hasta = new Date(yy, mm - 1, 25);
+  }
   el.desde.value = ymd(desde);
   el.hasta.value = ymd(hasta);
+}
+
+function monthNameEs(monthNumber1to12) {
+  const months = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+  return months[Math.max(1, Math.min(12, monthNumber1to12)) - 1];
+}
+
+function fmtDateDMY(d) {
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  return `${dd}/${mm}/${yy}`;
+}
+
+function refreshModoRangoBtn() {
+  if (!el.btnModoRango) return;
+  el.btnModoRango.textContent = modoRango === "1_fin" ? "Modo: 1 -> fin de mes" : "Modo: 26 -> 25";
 }
 
 function getFilters() {
@@ -321,8 +615,8 @@ function openDetalle(docenteDisplay, cat) {
 
   rows.sort((a, b) => a.fecha - b.fecha);
 
-  el.detalleTitle.textContent = `${docenteDisplay} Â· ${cat}`;
-  el.detalleSub.textContent = `Rango: ${last.filtros.desdeStr || "inicio"} â†’ ${last.filtros.hastaStr || "hoy"}`;
+  el.detalleTitle.textContent = `${docenteDisplay} · ${cat}`;
+  el.detalleSub.textContent = `Rango: ${last.filtros.desdeStr || "inicio"} → ${last.filtros.hastaStr || "hoy"}`;
 
   let total = 0;
 
@@ -338,7 +632,7 @@ function openDetalle(docenteDisplay, cat) {
   }).join("");
 
   el.detalleTotal.textContent = formatQty(total);
-  el.detalleResumen.innerHTML = `<b>${rows.length}</b> registros Â· <b>Total Î£O:</b> ${formatQty(total)}`;
+  el.detalleResumen.innerHTML = `<b>${rows.length}</b> registros · <b>Total ΣO:</b> ${formatQty(total)}`;
 
   el.dlgDetalle.showModal();
 }
@@ -409,9 +703,10 @@ function exportCSV() {
 
 /* ---------- Core ---------- */
 
-async function cargarYCalcular() {
+function calcularConDatos(data, options = {}) {
+  const silent = Boolean(options.silent);
   try {
-    setStatus("Cargando RIPâ€¦", "warn");
+    if (!silent) setStatus("Calculando datos cargados...", "warn");
 
     const details = new Map();
     // key: kdoc||cat => array de { nombre, fecha: Date, qty: number }
@@ -421,15 +716,9 @@ async function cargarYCalcular() {
     let dropBadDate = 0;
     let dropOutRange = 0;
 
-    const res = await fetch(CFG.TSV_URL, { cache: "no-store" });
-    if (!res.ok) throw new Error("No se pudo leer el TSV (HTTP " + res.status + ")");
-    const tsv = await res.text();
+    if (!data.length) throw new Error("La colección de Firebase está vacía.");
 
-    const rows = parseTSV(tsv);
-    if (rows.length < 2) throw new Error("TSV vacÃ­o o sin data.");
-
-    el.kpiFilas.textContent = String(rows.length - 1);
-    const data = rows.slice(1);
+    el.kpiFilas.textContent = String(data.length);
 
     // docentes list (H) deduplicada por clave normalizada
     const seen = new Map(); // kdoc -> display
@@ -535,7 +824,7 @@ async function cargarYCalcular() {
 
     console.table({ dropNoDoc, dropBadDate, dropOutRange });
 
-    setStatus("Listo âœ…", "ok");
+    setStatus(silent ? "Actualizado desde Firebase." : "Listo ✅", "ok");
   } catch (err) {
     console.error(err);
     setStatus("Error: " + (err.message || err), "danger");
@@ -551,14 +840,113 @@ async function cargarYCalcular() {
   }
 }
 
+async function cargarYCalcular() {
+  try {
+    const filtros = getFilters();
+    const years = firestoreYearsForFilters(filtros);
+    const collectionName = CFG.FIRESTORE_COLLECTION || "rip";
+    const queryKey = `${collectionName}|years:${years.join(",") || "all"}`;
+
+    if (!firestoreLoaded || firestoreQueryKey !== queryKey) {
+      setStatus("Conectando con Firebase...", "warn");
+      await startFirestoreListener(filtros);
+    }
+    calcularConDatos(getFirestoreRows());
+  } catch (err) {
+    console.error(err);
+    setStatus("Error: " + (err.message || err), "danger");
+
+    el.thead.innerHTML = "";
+    el.tbody.innerHTML = "";
+    el.tfoot.innerHTML = "";
+
+    el.kpiFilas.textContent = "0";
+    el.kpiFiltradas.textContent = "0";
+    el.kpiCantidad.textContent = "0";
+    el.kpiValor.textContent = money(0);
+  }
+}
+
+function recalcularSiHayDatos() {
+  if (!firestoreLoaded) return;
+  const filtros = getFilters();
+  const years = firestoreYearsForFilters(filtros);
+  const collectionName = CFG.FIRESTORE_COLLECTION || "rip";
+  const queryKey = `${collectionName}|years:${years.join(",") || "all"}`;
+  if (firestoreQueryKey !== queryKey) {
+    cargarYCalcular();
+    return;
+  }
+  calcularConDatos(getFirestoreRows());
+}
+
 /* ---------- Tarifas UI ---------- */
 
 function openTarifas() {
-  renderTarifasRows();
+  if (el.tarifasBody) renderTarifasRows();
   el.dlgTarifas.showModal();
 }
 
+async function enviarSeguimientoPagos() {
+  if (!last?.out?.length) {
+    setStatus("Primero carga y calcula.", "warn");
+    return;
+  }
+
+  const m = el.mes?.value || "";
+  let year;
+  let month;
+  if (m && /^\d{4}-\d{2}$/.test(m)) {
+    [year, month] = m.split("-").map(Number);
+  } else {
+    const d = new Date();
+    year = d.getFullYear();
+    month = d.getMonth() + 1;
+  }
+
+  const mesNombre = monthNameEs(month);
+  const fechaPago = new Date(year, month, 1); // 1 del mes siguiente al mes elegido
+  const diaSugerido = fmtDateDMY(fechaPago);
+
+  const lines = last.out.map((r) => {
+    const nombre = r.docente || "";
+    const categoria = "Cuenta de cobro";
+    const subcategoria = "Docentes";
+    const valor = Math.round(Number(r.value || 0));
+    return [
+      nombre,        // A Nombre
+      categoria,     // B Categoria
+      subcategoria,  // C Subcategoria
+      valor,         // D Valor Cuenta de cobro
+      mesNombre,     // E Mes
+      diaSugerido,   // F Dia sugerido
+      "",            // G (formula en sheet)
+      "",            // H (formula en sheet)
+      ""             // I (formula en sheet)
+    ].join("\t");
+  });
+
+  const tsv = lines.join("\n");
+
+  try {
+    await navigator.clipboard.writeText(tsv);
+    setStatus(`Seguimiento listo: ${lines.length} filas copiadas.`, "ok");
+  } catch {
+    const blob = new Blob([tsv], { type: "text/tab-separated-values;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `seguimiento_pagos_${year}_${String(month).padStart(2, "0")}.tsv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    setStatus("No pude copiar al portapapeles. Descargué TSV.", "warn");
+  }
+}
+
 function renderTarifasRows() {
+  if (!el.tarifasBody) return;
   const rows = Object.entries(tarifas)
     .sort((a, b) => a[0].localeCompare(b[0], "es"));
 
@@ -577,6 +965,7 @@ function renderTarifasRows() {
 }
 
 function addTarifaRow(cat = "", value = 0) {
+  if (!el.tarifasBody) return;
   const tr = document.createElement("tr");
   tr.innerHTML = `
     <td><input class="rateInput rateCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
@@ -594,6 +983,7 @@ function parseRateValue(v) {
 
 function saveTarifasFromUI() {
   try {
+    if (!el.tarifasBody) throw new Error("La interfaz de tarifas no está disponible en esta versión.");
     const fixed = {};
     const rows = Array.from(el.tarifasBody.querySelectorAll("tr"));
     for (const row of rows) {
@@ -602,28 +992,231 @@ function saveTarifasFromUI() {
       fixed[cat] = parseRateValue(row.querySelector(".rateValue")?.value || "0");
     }
 
-    if (!Object.keys(fixed).length) throw new Error("Debes ingresar al menos una categoria.");
+    if (!Object.keys(fixed).length) throw new Error("Debes ingresar al menos una categoría.");
 
     tarifas = fixed;
     saveTarifas();
-    setStatus("Tarifas guardadas âœ…", "ok");
+    setStatus("Tarifas guardadas ✅", "ok");
   } catch (e) {
-    setStatus("Tarifas invÃ¡lidas: " + (e.message || e), "danger");
+    setStatus("Tarifas inválidas: " + (e.message || e), "danger");
   }
 }
+/* ---------- Flujo de Caja ---------- */
+
+let flujoApp = null;
+let flujoDb  = null;
+
+function initFlujoFirebase() {
+  if (!window.firebase) throw new Error("Firebase SDK no cargó.");
+  if (!flujoApp) {
+    const existing = (firebase.apps || []).find(a => a.name === "flujo");
+    flujoApp = existing || firebase.initializeApp(CFG.FLUJO_CONFIG, "flujo");
+    flujoDb  = firebase.firestore(flujoApp);
+  }
+  return flujoDb;
+}
+
+async function ensureFlujoAuth() {
+  initFlujoFirebase();
+  const auth = firebase.auth(flujoApp);
+  await auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL);
+  if (auth.currentUser) return auth.currentUser;
+  const provider = new firebase.auth.GoogleAuthProvider();
+  provider.setCustomParameters({ prompt: "select_account" });
+  const result = await auth.signInWithPopup(provider);
+  return result.user;
+}
+
+function flujoDocId(año, mes, docente) {
+  return `${año}-${String(mes).padStart(2, "0")}-${keyDocente(docente)}`;
+}
+
+function getMesAño() {
+  const m = el.mes?.value || "";
+  if (m && /^\d{4}-\d{2}$/.test(m)) {
+    const [año, mes] = m.split("-").map(Number);
+    return { año, mes };
+  }
+  const d = new Date();
+  return { año: d.getFullYear(), mes: d.getMonth() + 1 };
+}
+
+function flujoSetStatus(txt, kind = "warn") {
+  el.flujoStatusBar.hidden = false;
+  el.flujoStatusBar.className = `flujoStatusBar ${kind}`;
+  el.flujoStatusTxt.textContent = txt;
+}
+
+function flujoRenderRows(rows) {
+  el.flujoBody.innerHTML = rows.map(r => `
+    <tr>
+      <td><strong>${escapeHtml(r.docente)}</strong></td>
+      <td style="text-align:right;">${money(r.valor)}</td>
+      <td style="text-align:center;"><span class="badge ${r.badge}">${escapeHtml(r.estado)}</span></td>
+    </tr>
+  `).join("");
+}
+
+async function abrirDialogFlujo() {
+  if (!last?.out?.length) {
+    setStatus("Primero carga y calcula.", "warn");
+    return;
+  }
+
+  const { año, mes } = getMesAño();
+  el.flujoTitle.textContent = `Enviar a Flujo de Caja · ${monthNameEs(mes)} ${año}`;
+  el.flujoSub.textContent   = `Prestación de servicios · Docentes`;
+  el.flujoStatusBar.hidden  = true;
+  el.flujoOpts.hidden       = true;
+  el.flujoGuardar.disabled  = true;
+  el.flujoReemplazar.checked = false;
+
+  const rows = last.out.map(r => ({
+    docente: r.docente,
+    valor:   Math.round(Number(r.value || 0)),
+    badge:   "checking",
+    estado:  "Comprobando…",
+    id:      flujoDocId(año, mes, r.docente),
+  }));
+
+  flujoRenderRows(rows);
+  el.dlgFlujo.showModal();
+
+  // auto-comprobar al abrir
+  await comprobarFlujoRows(rows, año, mes);
+}
+
+async function comprobarFlujoRows(rows, año, mes) {
+  flujoSetStatus("Conectando con Flujo de Caja…", "warn");
+  try {
+    await ensureFlujoAuth();
+    const db = initFlujoFirebase();
+    const col = CFG.FLUJO_COLLECTION;
+
+    const snapshots = await Promise.all(
+      rows.map(r => db.collection(col).doc(r.id).get())
+    );
+
+    let nuevos = 0, existen = 0;
+    snapshots.forEach((snap, i) => {
+      if (snap.exists) {
+        rows[i].badge  = "existe";
+        rows[i].estado = "Ya existe";
+        existen++;
+      } else {
+        rows[i].badge  = "nuevo";
+        rows[i].estado = "Nuevo";
+        nuevos++;
+      }
+    });
+
+    flujoRenderRows(rows);
+    el.flujoOpts.hidden    = false;
+    el.flujoGuardar.disabled = false;
+
+    if (existen === 0) {
+      flujoSetStatus(`✅ ${nuevos} registros nuevos listos para guardar.`, "ok");
+    } else if (nuevos === 0) {
+      flujoSetStatus(`⚠️ Todos los ${existen} registros ya existen. Activa "Reemplazar" si quieres actualizar.`, "warn");
+    } else {
+      flujoSetStatus(`${nuevos} nuevos · ${existen} ya existen (activa "Reemplazar" para actualizarlos).`, "warn");
+    }
+
+    // guardar rows en closure para uso posterior
+    el.flujoGuardar._rows = rows;
+    el.flujoGuardar._año  = año;
+    el.flujoGuardar._mes  = mes;
+
+  } catch (err) {
+    flujoSetStatus("Error al comprobar: " + (err.message || err), "err");
+  }
+}
+
+async function guardarEnFlujo() {
+  const rows      = el.flujoGuardar._rows;
+  const año       = el.flujoGuardar._año;
+  const mes       = el.flujoGuardar._mes;
+  const reemplazar = el.flujoReemplazar.checked;
+
+  if (!rows?.length) return;
+
+  const toSave = rows.filter(r => r.badge === "nuevo" || (reemplazar && r.badge === "existe"));
+  if (!toSave.length) {
+    flujoSetStatus("Nada que guardar. Activa 'Reemplazar' si quieres sobrescribir los existentes.", "warn");
+    return;
+  }
+
+  el.flujoGuardar.disabled   = true;
+  el.flujoComprobar.disabled = true;
+  flujoSetStatus(`Guardando ${toSave.length} registros…`, "warn");
+
+  try {
+    const db  = initFlujoFirebase();
+    const col = CFG.FLUJO_COLLECTION;
+    const mesNombre = monthNameEs(mes);
+    const rango = last?.filtros
+      ? `${last.filtros.desdeStr || ""} → ${last.filtros.hastaStr || ""}`
+      : "";
+
+    const ts = firebase.firestore.FieldValue.serverTimestamp();
+
+    await Promise.all(toSave.map(r =>
+      db.collection(col).doc(r.id).set({
+        tipo:        "prestacion_docente",
+        docente:     r.docente,
+        valor:       r.valor,
+        mes,
+        año,
+        mesNombre,
+        rango,
+        estado:      "pendiente",
+        creadoEn:    ts,
+      })
+    ));
+
+    // actualizar badges
+    toSave.forEach(r => {
+      const row = rows.find(x => x.id === r.id);
+      if (row) { row.badge = "guardado"; row.estado = "Guardado ✅"; }
+    });
+    flujoRenderRows(rows);
+    flujoSetStatus(`✅ ${toSave.length} registros guardados como pendientes de pago.`, "ok");
+
+  } catch (err) {
+    flujoSetStatus("Error al guardar: " + (err.message || err), "err");
+  } finally {
+    el.flujoGuardar.disabled   = false;
+    el.flujoComprobar.disabled = false;
+  }
+}
+
 /* ---------- Eventos ---------- */
 
 function setup() {
   // defaults: mes actual
   const now = new Date();
   el.mes.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  refreshModoRangoBtn();
   applyMonthToRange();
 
   setStatus("Sin cargar", "muted");
 
-  el.mes.addEventListener("change", () => applyMonthToRange());
+  if (el.mes) el.mes.addEventListener("change", () => {
+    applyMonthToRange();
+    recalcularSiHayDatos();
+  });
+  if (el.desde) el.desde.addEventListener("change", recalcularSiHayDatos);
+  if (el.hasta) el.hasta.addEventListener("change", recalcularSiHayDatos);
+  if (el.btnModoRango) {
+    el.btnModoRango.addEventListener("click", () => {
+      modoRango = modoRango === "26_25" ? "1_fin" : "26_25";
+      refreshModoRangoBtn();
+      applyMonthToRange();
+      recalcularSiHayDatos();
+    });
+  }
 
-  el.docentesBtn.addEventListener("click", (ev) => {
+  if (el.docentesBtn) el.docentesBtn.addEventListener("click", (ev) => {
     ev.preventDefault();
     if (el.docentesPanel.hidden) openDocentesPanel();
     else closeDocentesPanel();
@@ -633,29 +1226,42 @@ function setup() {
     if (!el.docentesBox.contains(ev.target)) closeDocentesPanel();
   });
 
-  el.docentesSearch.addEventListener("input", () => renderDocentesList(el.docentesSearch.value));
+  if (el.docentesSearch) el.docentesSearch.addEventListener("input", () => renderDocentesList(el.docentesSearch.value));
 
-  el.docentesAll.addEventListener("click", () => {
+  if (el.docentesAll) el.docentesAll.addEventListener("click", () => {
     docentesSelected = null;
     renderDocentesList(el.docentesSearch.value);
+    recalcularSiHayDatos();
   });
 
-  el.docentesNone.addEventListener("click", () => {
+  if (el.docentesNone) el.docentesNone.addEventListener("click", () => {
     docentesSelected = new Set();
     renderDocentesList(el.docentesSearch.value);
+    recalcularSiHayDatos();
   });
 
-  el.docentesList.addEventListener("change", () => syncSelectedFromCheckboxes());
+  if (el.docentesList) el.docentesList.addEventListener("change", () => {
+    syncSelectedFromCheckboxes();
+    recalcularSiHayDatos();
+  });
 
-  el.btnCargar.addEventListener("click", () => {
+  if (el.btnCargar) el.btnCargar.addEventListener("click", () => {
     applyMonthToRange();
     cargarYCalcular();
   });
 
-  el.btnExport.addEventListener("click", exportCSV);
+  if (el.btnExport) el.btnExport.addEventListener("click", exportCSV);
+  if (el.btnSeguimiento) el.btnSeguimiento.addEventListener("click", enviarSeguimientoPagos);
+  if (el.btnFlujo) el.btnFlujo.addEventListener("click", abrirDialogFlujo);
+  if (el.flujoComprobar) el.flujoComprobar.addEventListener("click", () => {
+    const rows = el.flujoGuardar._rows;
+    const { año, mes } = getMesAño();
+    if (rows) comprobarFlujoRows(rows, año, mes);
+  });
+  if (el.flujoGuardar) el.flujoGuardar.addEventListener("click", guardarEnFlujo);
 
   // Click en celda => detalle
-  el.tabla.addEventListener("click", (ev) => {
+  if (el.tabla) el.tabla.addEventListener("click", (ev) => {
     const td = ev.target.closest("td.clickable");
     if (!td || !last) return;
     const docente = td.getAttribute("data-doc") || "";
@@ -664,32 +1270,42 @@ function setup() {
     openDetalle(docente, cat);
   });
 
-  el.btnVerTarifas.addEventListener("click", openTarifas);
+  if (el.btnVerTarifas) el.btnVerTarifas.addEventListener("click", openTarifas);
 
-  el.btnAgregarTarifa.addEventListener("click", () => addTarifaRow());
+  if (el.btnAgregarTarifa) {
+    el.btnAgregarTarifa.addEventListener("click", () => addTarifaRow());
+  }
 
-  el.tarifasBody.addEventListener("click", (ev) => {
-    const btn = ev.target.closest(".rateDel");
-    if (!btn) return;
-    const tr = btn.closest("tr");
-    if (!tr) return;
-    tr.remove();
-    if (!el.tarifasBody.querySelector("tr")) addTarifaRow();
-  });
+  if (el.tarifasBody) {
+    el.tarifasBody.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".rateDel");
+      if (!btn) return;
+      const tr = btn.closest("tr");
+      if (!tr) return;
+      tr.remove();
+      if (!el.tarifasBody.querySelector("tr")) addTarifaRow();
+    });
+  }
 
-  el.btnGuardarTarifas.addEventListener("click", () => {
+  if (el.btnGuardarTarifas) el.btnGuardarTarifas.addEventListener("click", () => {
     saveTarifasFromUI();
-    if (last) cargarYCalcular();
+    recalcularSiHayDatos();
   });
 
-  el.btnResetTarifas.addEventListener("click", () => {
+  if (el.btnResetTarifas) el.btnResetTarifas.addEventListener("click", () => {
     tarifas = structuredClone(CFG.DEFAULT_TARIFAS);
     saveTarifas();
     setStatus("Tarifas reseteadas (demo).", "warn");
     if (el.dlgTarifas.open) renderTarifasRows();
-    if (last) cargarYCalcular();
+    recalcularSiHayDatos();
   });
-}
 
-setup();
+  watchAuthAndAutoload();
+}
+try {
+  setup();
+} catch (err) {
+  console.error("Error en setup:", err);
+  setStatus("Error de interfaz. Recarga con Ctrl+F5.", "danger");
+}
 
