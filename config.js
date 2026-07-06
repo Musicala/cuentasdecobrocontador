@@ -27,6 +27,8 @@ window.RIP_CONFIG = {
   // - campos por letra: { D, E, H, O, P }
   // - campos por nombre: { nombre, fecha, docente, cantidad, categoria }
   FIRESTORE_COLLECTION: "registro",
+  FIRESTORE_CONFIG_COLLECTION: "configuracion",
+  FIRESTORE_TARIFAS_DOC: "tarifas_docentes",
 
   // Columnas según tu regla:
   // E = Fecha
@@ -51,5 +53,5 @@ window.RIP_CONFIG = {
     "SPACES": 0
   },
 
-  LS_KEY_TARIFAS: "rip_tarifas_por_categoria_v1"
+  LS_KEY_JORNADAS: "rip_jornadas_docentes_v1"
 };

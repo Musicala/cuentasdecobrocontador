@@ -67,15 +67,26 @@ const el = {
 
   btnVerTarifas: $("#btnVerTarifas"),
   dlgTarifas: $("#dlgTarifas"),
+  tarifasHead: $("#dlgTarifas thead"),
   tarifasBody: $("#tarifasBody"),
   btnAgregarTarifa: $("#btnAgregarTarifa"),
   btnGuardarTarifas: $("#btnGuardarTarifas"),
   btnResetTarifas: $("#btnResetTarifas"),
+  btnVerJornadas: $("#btnVerJornadas"),
+  dlgJornadas: $("#dlgJornadas"),
+  jornadasBody: $("#jornadasBody"),
+  btnAgregarJornada: $("#btnAgregarJornada"),
+  btnGuardarJornadas: $("#btnGuardarJornadas"),
 };
 
-let tarifas = loadTarifas();
+let tarifasDefaults = structuredClone(CFG.DEFAULT_TARIFAS || {});
+let tarifasDocentes = {};
+let tarifasLoaded = false;
+let jornadas = loadJornadas();
 let last = null; // { out, cats, totals, filtros, details }
 let modoRango = "26_25"; // "26_25" | "1_fin"
+let tarifaDocenteActivo = "";
+let tarifasVista = "docente";
 
 /* ---------- UI status ---------- */
 
@@ -130,6 +141,7 @@ let firestoreInitialLoad = null;
 let firestoreLoaded = false;
 let firestoreQueryKey = "";
 let autoLoadStarted = false;
+let firestoreRecalcTimer = null;
 
 function initFirebase() {
   if (!window.firebase) {
@@ -306,10 +318,21 @@ function firestoreYearsForFilters(filtros) {
 
 function stopFirestoreListener() {
   if (firestoreUnsubscribe) firestoreUnsubscribe();
+  if (firestoreRecalcTimer) clearTimeout(firestoreRecalcTimer);
   firestoreUnsubscribe = null;
+  firestoreRecalcTimer = null;
   firestoreDocsById = new Map();
   firestoreInitialLoad = null;
   firestoreLoaded = false;
+}
+
+function scheduleFirestoreRecalc() {
+  if (!last) return;
+  if (firestoreRecalcTimer) clearTimeout(firestoreRecalcTimer);
+  firestoreRecalcTimer = setTimeout(() => {
+    firestoreRecalcTimer = null;
+    calcularConDatos(getFirestoreRows(), { silent: true, skipFlujoRefresh: true });
+  }, 600);
 }
 
 async function startFirestoreListener(filtros = null) {
@@ -334,7 +357,13 @@ async function startFirestoreListener(filtros = null) {
 
   firestoreInitialLoad = new Promise((resolve, reject) => {
     firestoreUnsubscribe = ref.onSnapshot((snap) => {
-      snap.docChanges().forEach((change) => {
+      const changes = snap.docChanges();
+      if (!changes.length && firestoreLoaded) {
+        resolve();
+        return;
+      }
+
+      changes.forEach((change) => {
         if (change.type === "removed") {
           firestoreDocsById.delete(change.doc.id);
         } else {
@@ -346,7 +375,7 @@ async function startFirestoreListener(filtros = null) {
       resolve();
 
       if (last) {
-        calcularConDatos(getFirestoreRows(), { silent: true });
+        scheduleFirestoreRecalc();
       }
     }, (err) => {
       firestoreInitialLoad = null;
@@ -484,22 +513,209 @@ function formatQty(x) {
   return n.toLocaleString("es-CO", { maximumFractionDigits: 2 });
 }
 
-/* ---------- Tarifas ---------- */
+/* ---------- Tarifas compartidas por docente ---------- */
 
-function loadTarifas() {
-  const raw = localStorage.getItem(CFG.LS_KEY_TARIFAS);
-  if (!raw) return structuredClone(CFG.DEFAULT_TARIFAS);
+function defaultTarifas() {
+  return structuredClone(tarifasDefaults || CFG.DEFAULT_TARIFAS || {});
+}
+
+function normalizeTarifasDefaults(raw) {
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : CFG.DEFAULT_TARIFAS || {};
+  const out = {};
+  for (const [cat, value] of Object.entries(source)) {
+    const catKey = upper(cat);
+    if (!catKey) continue;
+    out[catKey] = Number(value || 0);
+  }
+  return out;
+}
+
+function normalizeTarifasDocentes(raw) {
+  const out = {};
+  const source = raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
+  for (const [k, item] of Object.entries(source)) {
+    const docente = norm(item?.docente || "");
+    const ratesRaw = item?.rates || {};
+    const rates = {};
+    for (const [cat, value] of Object.entries(ratesRaw)) {
+      const catKey = upper(cat);
+      if (!catKey) continue;
+      rates[catKey] = Number(value || 0);
+    }
+    if (docente) out[k] = { docente, rates };
+  }
+  return out;
+}
+
+function tarifaDocRef() {
+  const db = initFirebase();
+  return db
+    .collection(CFG.FIRESTORE_CONFIG_COLLECTION || "configuracion")
+    .doc(CFG.FIRESTORE_TARIFAS_DOC || "tarifas_docentes");
+}
+
+async function loadSharedTarifas() {
+  await ensureAuth();
+  const snap = await tarifaDocRef().get();
+  const data = snap.exists ? snap.data() || {} : {};
+  tarifasDefaults = normalizeTarifasDefaults(data.defaults || CFG.DEFAULT_TARIFAS);
+  tarifasDocentes = normalizeTarifasDocentes(data.docentes);
+  tarifasLoaded = true;
+}
+
+async function saveSharedTarifas() {
+  await ensureAuth();
+  await tarifaDocRef().set({
+    defaults: tarifasDefaults,
+    docentes: tarifasDocentes,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+function tarifasForDocente(docente) {
+  const kdoc = keyDocente(docente);
+  return {
+    ...defaultTarifas(),
+    ...(tarifasDocentes[kdoc]?.rates || {}),
+  };
+}
+
+function tarifaFor(docente, cat) {
+  return Number(tarifasForDocente(docente)[upper(cat)] ?? 0);
+}
+
+function categoriasTarifasDisponibles(extraCats = []) {
+  return Array.from(new Set([
+    ...Object.keys(defaultTarifas()).map(upper),
+    ...extraCats.map(upper),
+  ])).filter(Boolean).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+/* ---------- Jornadas ---------- */
+
+function loadJornadas() {
+  const raw = localStorage.getItem(CFG.LS_KEY_JORNADAS);
+  if (!raw) return [];
   try {
-    const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error("Tarifas inválidas");
-    return obj;
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr : [];
   } catch {
-    return structuredClone(CFG.DEFAULT_TARIFAS);
+    return [];
   }
 }
 
-function saveTarifas() {
-  localStorage.setItem(CFG.LS_KEY_TARIFAS, JSON.stringify(tarifas));
+function saveJornadas() {
+  localStorage.setItem(CFG.LS_KEY_JORNADAS, JSON.stringify(jornadas));
+}
+
+function minutesFromTime(v) {
+  const t = norm(v);
+  if (!t) return null;
+  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return null;
+  const hh = Number(m[1]);
+  const mm = Number(m[2]);
+  if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+  return hh * 60 + mm;
+}
+
+function minutesFromDate(d) {
+  if (!(d instanceof Date) || isNaN(d.getTime())) return null;
+  const minutes = d.getHours() * 60 + d.getMinutes();
+  return minutes === 0 ? null : minutes;
+}
+
+function jornadaLabel(j) {
+  const hours = j.desde || j.hasta ? ` ${j.desde || "00:00"}-${j.hasta || "23:59"}` : "";
+  return `${j.fecha}${hours}`;
+}
+
+function jornadaMatches(j, kdoc, fecha) {
+  if (!j || keyDocente(j.docente) !== kdoc) return false;
+  if (j.fecha !== ymd(fecha)) return false;
+
+  const desde = minutesFromTime(j.desde);
+  const hasta = minutesFromTime(j.hasta);
+  if (desde === null && hasta === null) return true;
+
+  const current = minutesFromDate(fecha);
+  if (current === null) return true;
+  if (desde !== null && current < desde) return false;
+  if (hasta !== null && current > hasta) return false;
+  return true;
+}
+
+function findJornada(kdoc, fecha) {
+  return jornadas.find(j => jornadaMatches(j, kdoc, fecha)) || null;
+}
+
+function jornadaKeyFor(kdoc, j) {
+  return `${kdoc}||${j.fecha}||${j.desde || ""}||${j.hasta || ""}||${j.valor}`;
+}
+
+function openJornadas() {
+  renderJornadasRows();
+  el.dlgJornadas.showModal();
+}
+
+function renderJornadasRows() {
+  if (!el.jornadasBody) return;
+  if (!jornadas.length) {
+    el.jornadasBody.innerHTML = "";
+    addJornadaRow();
+    return;
+  }
+  el.jornadasBody.innerHTML = jornadas.map(j => jornadaRowHtml(j)).join("");
+}
+
+function jornadaRowHtml(j = {}) {
+  const current = norm(j.docente || "");
+  const names = Array.from(new Set([current, ...docentesAll])).filter(Boolean);
+  const options = [
+    `<option value="">Docente</option>`,
+    ...names.map(d => `<option value="${escapeHtml(d)}" ${keyDocente(d) === keyDocente(current) ? "selected" : ""}>${escapeHtml(d)}</option>`)
+  ].join("");
+  return `
+    <tr>
+      <td><select class="rateInput jornadaDocente">${options}</select></td>
+      <td><input class="rateInput jornadaFecha" type="date" value="${escapeHtml(j.fecha || "")}"></td>
+      <td><input class="rateInput jornadaDesde" type="time" value="${escapeHtml(j.desde || "")}"></td>
+      <td><input class="rateInput jornadaHasta" type="time" value="${escapeHtml(j.hasta || "")}"></td>
+      <td><input class="rateInput jornadaValor" type="text" value="${Number(j.valor || 0)}" inputmode="numeric" placeholder="0"></td>
+      <td><input class="rateInput jornadaNota" type="text" value="${escapeHtml(j.nota || "")}" placeholder="4h, 8h..."></td>
+      <td><button class="rateDel jornadaDel" type="button" title="Eliminar">X</button></td>
+    </tr>
+  `;
+}
+
+function addJornadaRow(j = {}) {
+  if (!el.jornadasBody) return;
+  const tr = document.createElement("tr");
+  tr.innerHTML = jornadaRowHtml(j).trim().replace(/^<tr>|<\/tr>$/g, "");
+  el.jornadasBody.appendChild(tr);
+}
+
+function saveJornadasFromUI() {
+  try {
+    const fixed = [];
+    const rows = Array.from(el.jornadasBody.querySelectorAll("tr"));
+    for (const row of rows) {
+      const docente = norm(row.querySelector(".jornadaDocente")?.value || "");
+      const fecha = norm(row.querySelector(".jornadaFecha")?.value || "");
+      const desde = norm(row.querySelector(".jornadaDesde")?.value || "");
+      const hasta = norm(row.querySelector(".jornadaHasta")?.value || "");
+      const valor = parseRateValue(row.querySelector(".jornadaValor")?.value || "0");
+      const nota = norm(row.querySelector(".jornadaNota")?.value || "");
+      if (!docente && !fecha && !valor) continue;
+      if (!docente || !fecha || !valor) throw new Error("Cada jornada necesita docente, fecha y valor.");
+      fixed.push({ docente, fecha, desde, hasta, valor, nota });
+    }
+    jornadas = fixed;
+    saveJornadas();
+    setStatus("Jornadas guardadas.", "ok");
+  } catch (e) {
+    setStatus("Jornadas invalidas: " + (e.message || e), "danger");
+  }
 }
 
 /* ---------- Multi select docentes ---------- */
@@ -623,7 +839,8 @@ function openDetalle(docenteDisplay, cat) {
   el.detalleBody.innerHTML = rows.map(x => {
     total += x.qty;
     const f = ymd(x.fecha);
-    const nombre = norm(x.nombre) || "(Sin nombre)";
+    const nombreBase = norm(x.nombre) || "(Sin nombre)";
+    const nombre = x.jornada ? `${nombreBase} · ${x.jornada} · ${money(x.valor || 0)}` : nombreBase;
     return `<tr>
       <td>${escapeHtml(nombre)}</td>
       <td>${f}</td>
@@ -705,6 +922,7 @@ function exportCSV() {
 
 function calcularConDatos(data, options = {}) {
   const silent = Boolean(options.silent);
+  const skipFlujoRefresh = Boolean(options.skipFlujoRefresh);
   try {
     if (!silent) setStatus("Calculando datos cargados...", "warn");
 
@@ -748,6 +966,7 @@ function calcularConDatos(data, options = {}) {
     let filteredCount = 0;
     const byDoc = new Map(); // kdoc -> row
     const catsSet = new Set();
+    const appliedJornadas = new Set();
 
     // Para filtrar docentes por clave
     const selectedKeys = docentesSelected ? new Set(Array.from(docentesSelected).map(keyDocente)) : null;
@@ -768,8 +987,9 @@ function calcularConDatos(data, options = {}) {
       // Nombre (D) = Ã­ndice 3
       const nombre = norm(r[3]);
 
-      const cat = upper(r[CFG.IDX.CAT]) || "SIN_CATEGORIA";
-      const qty = parseNumberFlexible(r[CFG.IDX.CANT]);
+      const jornada = findJornada(kdoc, fecha);
+      const cat = jornada ? "JORNADA" : (upper(r[CFG.IDX.CAT]) || "SIN_CATEGORIA");
+      const qty = jornada ? 0 : parseNumberFlexible(r[CFG.IDX.CANT]);
 
       filteredCount++;
       catsSet.add(cat);
@@ -777,16 +997,68 @@ function calcularConDatos(data, options = {}) {
       // detalle
       const keyDetail = kdoc + "||" + cat;
       if (!details.has(keyDetail)) details.set(keyDetail, []);
-      details.get(keyDetail).push({ nombre, fecha, qty });
+      if (!jornada) details.get(keyDetail).push({ nombre, fecha, qty });
 
-      if (!byDoc.has(kdoc)) byDoc.set(kdoc, { docente: docenteDisplay, cats: {}, totalQty: 0, value: 0 });
+      if (!byDoc.has(kdoc)) byDoc.set(kdoc, { docente: docenteDisplay, cats: {}, totalQty: 0, value: 0, fixedValue: 0 });
       const row = byDoc.get(kdoc);
 
       // preferimos el display mÃ¡s completo/largo
       if (docenteDisplay.length > row.docente.length) row.docente = docenteDisplay;
 
-      row.cats[cat] = (row.cats[cat] || 0) + qty;
-      row.totalQty += qty;
+      if (jornada) {
+        const jornadaKey = jornadaKeyFor(kdoc, jornada);
+        if (!appliedJornadas.has(jornadaKey)) {
+          appliedJornadas.add(jornadaKey);
+          row.cats.JORNADA = (row.cats.JORNADA || 0) + 1;
+          row.totalQty += 1;
+          row.fixedValue += Number(jornada.valor || 0);
+          details.get(keyDetail).push({
+            nombre: jornada.nota || "Jornada",
+            fecha,
+            qty: 1,
+            valor: Number(jornada.valor || 0),
+            jornada: jornadaLabel(jornada),
+          });
+        }
+      } else {
+        row.cats[cat] = (row.cats[cat] || 0) + qty;
+        row.totalQty += qty;
+      }
+    }
+
+    for (const jornada of jornadas) {
+      const docenteDisplay = norm(jornada.docente);
+      const kdoc = keyDocente(docenteDisplay);
+      if (!docenteDisplay) continue;
+      if (selectedKeys && !selectedKeys.has(kdoc)) continue;
+
+      const fecha = parseDateFlexible(jornada.fecha);
+      if (!fecha) continue;
+      if (filtros.desde && fecha < filtros.desde) continue;
+      if (filtros.hasta && fecha > filtros.hasta) continue;
+
+      const jornadaKey = jornadaKeyFor(kdoc, jornada);
+      if (appliedJornadas.has(jornadaKey)) continue;
+
+      appliedJornadas.add(jornadaKey);
+      catsSet.add("JORNADA");
+
+      const keyDetail = kdoc + "||JORNADA";
+      if (!details.has(keyDetail)) details.set(keyDetail, []);
+      details.get(keyDetail).push({
+        nombre: jornada.nota || "Jornada",
+        fecha,
+        qty: 1,
+        valor: Number(jornada.valor || 0),
+        jornada: jornadaLabel(jornada),
+      });
+
+      if (!byDoc.has(kdoc)) byDoc.set(kdoc, { docente: docenteDisplay, cats: {}, totalQty: 0, value: 0, fixedValue: 0 });
+      const row = byDoc.get(kdoc);
+      if (docenteDisplay.length > row.docente.length) row.docente = docenteDisplay;
+      row.cats.JORNADA = (row.cats.JORNADA || 0) + 1;
+      row.totalQty += 1;
+      row.fixedValue += Number(jornada.valor || 0);
     }
 
     el.kpiFiltradas.textContent = String(filteredCount);
@@ -798,10 +1070,10 @@ function calcularConDatos(data, options = {}) {
       let v = 0;
       for (const cat of cats) {
         const q = row.cats[cat] || 0;
-        const rate = Number(tarifas[cat] ?? 0);
+        const rate = tarifaFor(row.docente, cat);
         v += q * (isNaN(rate) ? 0 : rate);
       }
-      row.value = v;
+      row.value = v + Number(row.fixedValue || 0);
     }
 
     const out = Array.from(byDoc.values()).sort((a, b) => a.docente.localeCompare(b.docente, "es"));
@@ -825,6 +1097,7 @@ function calcularConDatos(data, options = {}) {
     console.table({ dropNoDoc, dropBadDate, dropOutRange });
 
     setStatus(silent ? "Actualizado desde Firebase." : "Listo ✅", "ok");
+    if (!skipFlujoRefresh) loadFlujoUploaded();
   } catch (err) {
     console.error(err);
     setStatus("Error: " + (err.message || err), "danger");
@@ -850,6 +1123,10 @@ async function cargarYCalcular() {
     if (!firestoreLoaded || firestoreQueryKey !== queryKey) {
       setStatus("Conectando con Firebase...", "warn");
       await startFirestoreListener(filtros);
+    }
+    if (!tarifasLoaded) {
+      setStatus("Cargando tarifas compartidas...", "warn");
+      await loadSharedTarifas();
     }
     calcularConDatos(getFirestoreRows());
   } catch (err) {
@@ -882,7 +1159,11 @@ function recalcularSiHayDatos() {
 
 /* ---------- Tarifas UI ---------- */
 
-function openTarifas() {
+async function openTarifas() {
+  if (!tarifasLoaded) {
+    setStatus("Cargando tarifas compartidas...", "warn");
+    await loadSharedTarifas();
+  }
   if (el.tarifasBody) renderTarifasRows();
   el.dlgTarifas.showModal();
 }
@@ -947,31 +1228,132 @@ async function enviarSeguimientoPagos() {
 
 function renderTarifasRows() {
   if (!el.tarifasBody) return;
-  const rows = Object.entries(tarifas)
-    .sort((a, b) => a[0].localeCompare(b[0], "es"));
-
-  if (!rows.length) {
-    addTarifaRow();
+  renderTarifasViewTabs();
+  if (el.btnAgregarTarifa) {
+    el.btnAgregarTarifa.hidden = tarifasVista !== "defaults";
+    el.btnAgregarTarifa.textContent = "+ Agregar categoria";
+  }
+  if (tarifasVista === "defaults") {
+    renderTarifasDefaultsRows();
     return;
   }
 
-  el.tarifasBody.innerHTML = rows.map(([cat, value]) => `
+  const cats = categoriasTarifasDisponibles(last?.cats || []);
+  const docentes = tarifasDocentesList();
+
+  if (!tarifaDocenteActivo || !docentes.some(d => keyDocente(d) === keyDocente(tarifaDocenteActivo))) {
+    tarifaDocenteActivo = docentes[0] || "";
+  }
+
+  renderTarifasDocentePicker(docentes);
+
+  if (el.tarifasHead) {
+    el.tarifasHead.innerHTML = "<tr><th>Categoria</th><th>Valor para este docente</th></tr>";
+  }
+
+  if (!tarifaDocenteActivo) {
+    el.tarifasBody.innerHTML = `<tr><td colspan="2">Carga datos para ver docentes.</td></tr>`;
+    return;
+  }
+
+  el.tarifasBody.innerHTML = cats.map(cat => tarifaRowHtml(tarifaDocenteActivo, cat)).join("");
+}
+
+function renderTarifasViewTabs() {
+  if (!el.dlgTarifas) return;
+  let tabs = el.dlgTarifas.querySelector(".tarifasTabs");
+  if (!tabs) {
+    const wrap = el.dlgTarifas.querySelector(".ratesWrap");
+    tabs = document.createElement("div");
+    tabs.className = "tarifasTabs";
+    tabs.innerHTML = `
+      <button class="tarifaTab" type="button" data-view="docente">Por docente</button>
+      <button class="tarifaTab" type="button" data-view="defaults">Predeterminadas</button>
+    `;
+    wrap?.before(tabs);
+    tabs.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".tarifaTab");
+      if (!btn) return;
+      tarifasVista = btn.getAttribute("data-view") || "docente";
+      renderTarifasRows();
+    });
+  }
+
+  tabs.querySelectorAll(".tarifaTab").forEach(btn => {
+    btn.classList.toggle("active", btn.getAttribute("data-view") === tarifasVista);
+  });
+}
+
+function renderTarifasDefaultsRows() {
+  const picker = el.dlgTarifas?.querySelector(".tarifaDocentePicker");
+  if (picker) picker.hidden = true;
+
+  const cats = categoriasTarifasDisponibles(last?.cats || []);
+  if (el.tarifasHead) {
+    el.tarifasHead.innerHTML = "<tr><th>Categoria predeterminada</th><th>Valor</th><th></th></tr>";
+  }
+  el.tarifasBody.innerHTML = cats.map(cat => defaultTarifaRowHtml(cat)).join("");
+}
+
+function defaultTarifaRowHtml(cat = "") {
+  const defaults = defaultTarifas();
+  return `
     <tr>
-      <td><input class="rateInput rateCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
-      <td><input class="rateInput rateValue" type="text" value="${Number(value || 0)}" inputmode="numeric" placeholder="0"></td>
-      <td><button class="rateDel" type="button" title="Eliminar">X</button></td>
+      <td><input class="rateInput defaultCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
+      <td><input class="rateInput defaultValue" type="text" value="${Number(defaults[cat] || 0)}" inputmode="numeric" placeholder="0"></td>
+      <td><button class="rateDel defaultDel" type="button" title="Eliminar">X</button></td>
     </tr>
+  `;
+}
+
+function tarifasDocentesList() {
+  return Array.from(new Set([
+    ...docentesAll,
+    ...Object.values(tarifasDocentes).map(x => x.docente),
+  ])).filter(Boolean).sort((a, b) => a.localeCompare(b, "es"));
+}
+
+function renderTarifasDocentePicker(docentes) {
+  if (!el.dlgTarifas) return;
+  let box = el.dlgTarifas.querySelector(".tarifaDocentePicker");
+  if (!box) {
+    const wrap = el.dlgTarifas.querySelector(".ratesWrap");
+    box = document.createElement("div");
+    box.className = "tarifaDocentePicker";
+    box.innerHTML = `
+      <label>Docente</label>
+      <select id="tarifaDocenteSelect"></select>
+    `;
+    wrap?.before(box);
+    box.querySelector("select").addEventListener("change", (ev) => {
+      tarifaDocenteActivo = ev.target.value;
+      renderTarifasRows();
+    });
+  }
+
+  box.hidden = false;
+  const select = box.querySelector("select");
+  select.innerHTML = docentes.map(d => `
+    <option value="${escapeHtml(d)}" ${keyDocente(d) === keyDocente(tarifaDocenteActivo) ? "selected" : ""}>${escapeHtml(d)}</option>
   `).join("");
 }
 
-function addTarifaRow(cat = "", value = 0) {
-  if (!el.tarifasBody) return;
-  const tr = document.createElement("tr");
-  tr.innerHTML = `
-    <td><input class="rateInput rateCat" type="text" value="${escapeHtml(cat)}" placeholder="Categoria"></td>
-    <td><input class="rateInput rateValue" type="text" value="${Number(value || 0)}" inputmode="numeric" placeholder="0"></td>
-    <td><button class="rateDel" type="button" title="Eliminar">X</button></td>
+function tarifaRowHtml(docente = "", cat = "") {
+  const rates = tarifasForDocente(docente);
+  return `
+    <tr>
+      <td><strong>${escapeHtml(cat)}</strong></td>
+      <td>
+        <input class="rateInput rateValue" type="text" value="${Number(rates[cat] || 0)}" inputmode="numeric" data-cat="${escapeHtml(cat)}" placeholder="0">
+      </td>
+    </tr>
   `;
+}
+
+function addTarifaRow() {
+  if (tarifasVista !== "defaults" || !el.tarifasBody) return;
+  const tr = document.createElement("tr");
+  tr.innerHTML = defaultTarifaRowHtml("").trim().replace(/^<tr>|<\/tr>$/g, "");
   el.tarifasBody.appendChild(tr);
 }
 
@@ -981,30 +1363,45 @@ function parseRateValue(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
-function saveTarifasFromUI() {
+async function saveTarifasFromUI() {
   try {
     if (!el.tarifasBody) throw new Error("La interfaz de tarifas no está disponible en esta versión.");
-    const fixed = {};
-    const rows = Array.from(el.tarifasBody.querySelectorAll("tr"));
-    for (const row of rows) {
-      const cat = upper(row.querySelector(".rateCat")?.value || "");
-      if (!cat) continue;
-      fixed[cat] = parseRateValue(row.querySelector(".rateValue")?.value || "0");
+    if (tarifasVista === "defaults") {
+      const defaults = {};
+      el.tarifasBody.querySelectorAll("tr").forEach((row) => {
+        const cat = upper(row.querySelector(".defaultCat")?.value || "");
+        if (!cat) return;
+        defaults[cat] = parseRateValue(row.querySelector(".defaultValue")?.value || "0");
+      });
+      if (!Object.keys(defaults).length) throw new Error("Debes dejar al menos una tarifa predeterminada.");
+      tarifasDefaults = defaults;
+      await saveSharedTarifas();
+      setStatus("Tarifas predeterminadas guardadas para todos.", "ok");
+      return;
     }
 
-    if (!Object.keys(fixed).length) throw new Error("Debes ingresar al menos una categoría.");
+    const docente = norm(tarifaDocenteActivo);
+    if (!docente) throw new Error("Selecciona un docente.");
 
-    tarifas = fixed;
-    saveTarifas();
-    setStatus("Tarifas guardadas ✅", "ok");
+    const rates = {};
+    el.tarifasBody.querySelectorAll(".rateValue").forEach((input) => {
+      const cat = upper(input.getAttribute("data-cat") || "");
+      if (!cat) return;
+      rates[cat] = parseRateValue(input.value || "0");
+    });
+
+    tarifasDocentes[keyDocente(docente)] = { docente, rates };
+    await saveSharedTarifas();
+    setStatus(`Tarifas guardadas para ${docente}.`, "ok");
   } catch (e) {
     setStatus("Tarifas inválidas: " + (e.message || e), "danger");
   }
 }
 /* ---------- Flujo de Caja ---------- */
 
-let flujoApp = null;
-let flujoDb  = null;
+let flujoApp      = null;
+let flujoDb       = null;
+let flujoUploaded = new Set(); // keyDocente de los ya subidos para el mes activo
 
 function initFlujoFirebase() {
   if (!window.firebase) throw new Error("Firebase SDK no cargó.");
@@ -1055,6 +1452,51 @@ function flujoRenderRows(rows) {
       <td style="text-align:center;"><span class="badge ${r.badge}">${escapeHtml(r.estado)}</span></td>
     </tr>
   `).join("");
+}
+
+function watchFlujoAuth() {
+  try {
+    initFlujoFirebase();
+    firebase.auth(flujoApp).onAuthStateChanged((user) => {
+      if (user) loadFlujoUploaded();
+    });
+  } catch (_) { /* silencioso si Firebase no cargó aún */ }
+}
+
+async function loadFlujoUploaded() {
+  try {
+    if (!flujoApp) return;
+    const auth = firebase.auth(flujoApp);
+    if (!auth.currentUser) return;
+    if (!last?.out?.length) return;
+    const { año, mes } = getMesAño();
+    const db = initFlujoFirebase();
+    const snaps = await Promise.all(
+      last.out.map(r => db.collection(CFG.FLUJO_COLLECTION).doc(flujoDocId(año, mes, r.docente)).get())
+    );
+    flujoUploaded = new Set();
+    snaps.forEach((snap, i) => {
+      if (snap.exists) flujoUploaded.add(keyDocente(last.out[i].docente));
+    });
+    updateFlujoMarkers();
+  } catch (_) { /* silencioso */ }
+}
+
+function updateFlujoMarkers() {
+  el.tbody.querySelectorAll("tr").forEach(tr => {
+    const td = tr.querySelector("td:first-child");
+    if (!td) return;
+    const strong = td.querySelector("strong");
+    if (!strong) return;
+    td.querySelector(".flujoMark")?.remove();
+    if (flujoUploaded.has(keyDocente(strong.textContent))) {
+      const mark = document.createElement("span");
+      mark.className = "flujoMark";
+      mark.title = "Subido a Flujo de Caja este mes";
+      mark.textContent = "✓";
+      strong.prepend(mark);
+    }
+  });
 }
 
 async function abrirDialogFlujo() {
@@ -1181,6 +1623,7 @@ async function guardarEnFlujo() {
     });
     flujoRenderRows(rows);
     flujoSetStatus(`✅ ${toSave.length} registros guardados como pendientes de pago.`, "ok");
+    await loadFlujoUploaded();
 
   } catch (err) {
     flujoSetStatus("Error al guardar: " + (err.message || err), "err");
@@ -1193,6 +1636,17 @@ async function guardarEnFlujo() {
 /* ---------- Eventos ---------- */
 
 function setup() {
+  const tarifasTitle = el.dlgTarifas?.querySelector(".dlgTitle");
+  const tarifasSub = el.dlgTarifas?.querySelector(".dlgSub");
+  const tarifasHint = el.dlgTarifas?.querySelector(".dlgHint");
+  const tarifasTable = el.dlgTarifas?.querySelector(".ratesTable");
+  if (tarifasTitle) tarifasTitle.textContent = "Tarifas por docente";
+  if (tarifasSub) tarifasSub.textContent = "Cada docente usa tarifas predeterminadas, pero puedes ajustar valores propios.";
+  if (tarifasHint) tarifasHint.textContent = "Las casillas se llenan con la tarifa predeterminada. Cambia solo los valores que sean distintos para ese docente.";
+  if (tarifasTable) tarifasTable.classList.add("tarifasDocentesTable");
+  if (el.btnAgregarTarifa) el.btnAgregarTarifa.hidden = true;
+  if (el.btnResetTarifas) el.btnResetTarifas.textContent = "Reset predeterminado";
+
   // defaults: mes actual
   const now = new Date();
   el.mes.value = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
@@ -1271,6 +1725,7 @@ function setup() {
   });
 
   if (el.btnVerTarifas) el.btnVerTarifas.addEventListener("click", openTarifas);
+  if (el.btnVerJornadas) el.btnVerJornadas.addEventListener("click", openJornadas);
 
   if (el.btnAgregarTarifa) {
     el.btnAgregarTarifa.addEventListener("click", () => addTarifaRow());
@@ -1278,7 +1733,7 @@ function setup() {
 
   if (el.tarifasBody) {
     el.tarifasBody.addEventListener("click", (ev) => {
-      const btn = ev.target.closest(".rateDel");
+      const btn = ev.target.closest(".defaultDel");
       if (!btn) return;
       const tr = btn.closest("tr");
       if (!tr) return;
@@ -1287,20 +1742,43 @@ function setup() {
     });
   }
 
-  if (el.btnGuardarTarifas) el.btnGuardarTarifas.addEventListener("click", () => {
-    saveTarifasFromUI();
+  if (el.btnAgregarJornada) {
+    el.btnAgregarJornada.addEventListener("click", () => addJornadaRow());
+  }
+
+  if (el.jornadasBody) {
+    el.jornadasBody.addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".jornadaDel");
+      if (!btn) return;
+      const tr = btn.closest("tr");
+      if (!tr) return;
+      tr.remove();
+      if (!el.jornadasBody.querySelector("tr")) addJornadaRow();
+    });
+  }
+
+  if (el.btnGuardarJornadas) el.btnGuardarJornadas.addEventListener("click", () => {
+    saveJornadasFromUI();
     recalcularSiHayDatos();
   });
 
-  if (el.btnResetTarifas) el.btnResetTarifas.addEventListener("click", () => {
-    tarifas = structuredClone(CFG.DEFAULT_TARIFAS);
-    saveTarifas();
-    setStatus("Tarifas reseteadas (demo).", "warn");
+  if (el.btnGuardarTarifas) el.btnGuardarTarifas.addEventListener("click", async () => {
+    await saveTarifasFromUI();
+    recalcularSiHayDatos();
+  });
+
+  if (el.btnResetTarifas) el.btnResetTarifas.addEventListener("click", async () => {
+    tarifasDefaults = normalizeTarifasDefaults(CFG.DEFAULT_TARIFAS);
+    tarifasDocentes = {};
+    await saveSharedTarifas();
+    tarifasLoaded = true;
+    setStatus("Tarifas reseteadas a las predeterminadas de la app.", "warn");
     if (el.dlgTarifas.open) renderTarifasRows();
     recalcularSiHayDatos();
   });
 
   watchAuthAndAutoload();
+  watchFlujoAuth();
 }
 try {
   setup();

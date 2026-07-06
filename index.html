@@ -100,6 +100,7 @@
         </div>
         <div class="rowGap">
           <button class="ghost" id="btnVerTarifas" type="button">Tarifas</button>
+          <button class="ghost" id="btnVerJornadas" type="button">Jornadas</button>
         </div>
       </div>
 
@@ -141,6 +142,44 @@
 
           <p class="dlgHint">
             Si una categoría no tiene tarifa, se asume 0. O sea, trabajar gratis. Divino.
+          </p>
+        </form>
+      </dialog>
+
+      <dialog id="dlgJornadas" class="dlg">
+        <form method="dialog" class="dlgCard">
+          <div class="dlgHead">
+            <div>
+              <div class="dlgTitle">Jornadas por docente</div>
+              <div class="dlgSub">Un valor fijo reemplaza las clases del dia completo o de un horario.</div>
+            </div>
+            <button class="x" value="cancel" aria-label="Cerrar">X</button>
+          </div>
+
+          <div class="ratesWrap">
+            <table class="ratesTable jornadasTable">
+              <thead>
+                <tr>
+                  <th>Docente</th>
+                  <th>Fecha</th>
+                  <th>Desde</th>
+                  <th>Hasta</th>
+                  <th>Valor (COP)</th>
+                  <th>Nota</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="jornadasBody"></tbody>
+            </table>
+          </div>
+
+          <div class="dlgBtns">
+            <button id="btnAgregarJornada" class="ghost" type="button">+ Agregar jornada</button>
+            <button id="btnGuardarJornadas" class="primary" value="ok">Guardar</button>
+          </div>
+
+          <p class="dlgHint">
+            Deja las horas vacias para cubrir todo el dia. Si pones horas, solo reemplaza las clases dentro de ese rango.
           </p>
         </form>
       </dialog>
