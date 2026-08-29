@@ -414,8 +414,15 @@ td.clickable:hover {
   margin-top: 10px;
   border: 1.5px solid var(--line);
   border-radius: var(--r-sm);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-gutter: stable;
+  scrollbar-color: var(--brand) #eef2ff;
+  scrollbar-width: thin;
 }
+.ratesWrap::-webkit-scrollbar { height: 10px }
+.ratesWrap::-webkit-scrollbar-track { background: #eef2ff }
+.ratesWrap::-webkit-scrollbar-thumb { background: var(--brand); border-radius: 999px }
 .ratesTable {
   width: 100%;
   min-width: auto;
@@ -458,13 +465,27 @@ td.clickable:hover {
 .tarifasDocentesTable td { min-width: 160px }
 .tarifasDocentesTable th:first-child,
 .tarifasDocentesTable td:first-child { min-width: 180px }
-.jornadasTable { min-width: 900px }
+.jornadasTable { min-width: 1040px }
 .jornadasTable th,
 .jornadasTable td { min-width: 110px }
 .jornadasTable th:first-child,
 .jornadasTable td:first-child { min-width: 190px }
-.jornadasTable th:nth-child(6),
-.jornadasTable td:nth-child(6) { min-width: 150px }
+.jornadasTable th:nth-child(3),
+.jornadasTable td:nth-child(3) { min-width: 150px }
+.jornadaPeriodo { min-width: 160px !important }
+.jornadaMultidiaLabel { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; white-space: nowrap; font-size: 12px }
+.jornadaFechaHasta:disabled { opacity: .45; cursor: not-allowed }
+.jornadaLinkedCell { min-width: 220px !important; white-space: normal }
+.jornadaLinkedHint { color: var(--muted); font-size: 12px; line-height: 1.35 }
+.jornadaLinked summary { cursor: pointer; color: var(--brand); font-weight: 700; white-space: nowrap }
+.jornadaLinked ul { margin: 8px 0 0; padding-left: 17px; max-height: 180px; overflow-y: auto; font-size: 12px; line-height: 1.4 }
+.jornadaLinked li + li { margin-top: 6px }
+.jornadaLinked li span { color: var(--muted) }
+.detalleJornadaClases { margin-top: 7px; font-size: 12px }
+.detalleJornadaClases summary { cursor: pointer; color: var(--brand); font-weight: 700 }
+.detalleJornadaClases ul { margin: 7px 0 0; padding-left: 17px; max-height: 180px; overflow-y: auto; line-height: 1.4 }
+.detalleJornadaClases li + li { margin-top: 6px }
+.detalleJornadaClases li span { color: var(--muted) }
 
 .rateInput {
   width: 100%;

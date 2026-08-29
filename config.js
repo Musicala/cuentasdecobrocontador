@@ -29,6 +29,7 @@ window.RIP_CONFIG = {
   FIRESTORE_COLLECTION: "registro",
   FIRESTORE_CONFIG_COLLECTION: "configuracion",
   FIRESTORE_TARIFAS_DOC: "tarifas_docentes",
+  FIRESTORE_JORNADAS_DOC: "jornadas_docentes",
 
   // Columnas según tu regla:
   // E = Fecha

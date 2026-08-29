@@ -151,7 +151,7 @@
           <div class="dlgHead">
             <div>
               <div class="dlgTitle">Jornadas por docente</div>
-              <div class="dlgSub">Un valor fijo reemplaza las clases del dia completo o de un horario.</div>
+              <div class="dlgSub">Un valor fijo reemplaza las clases del día completo, de un horario o de un período.</div>
             </div>
             <button class="x" value="cancel" aria-label="Cerrar">X</button>
           </div>
@@ -161,11 +161,13 @@
               <thead>
                 <tr>
                   <th>Docente</th>
-                  <th>Fecha</th>
+                  <th>Fecha inicial</th>
+                  <th>Valor (COP)</th>
+                  <th>Período</th>
                   <th>Desde</th>
                   <th>Hasta</th>
-                  <th>Valor (COP)</th>
                   <th>Nota</th>
+                  <th>Clases vinculadas</th>
                   <th></th>
                 </tr>
               </thead>
@@ -175,11 +177,11 @@
 
           <div class="dlgBtns">
             <button id="btnAgregarJornada" class="ghost" type="button">+ Agregar jornada</button>
-            <button id="btnGuardarJornadas" class="primary" value="ok">Guardar</button>
+            <button id="btnGuardarJornadas" class="primary" type="button">Guardar</button>
           </div>
 
           <p class="dlgHint">
-            Deja las horas vacias para cubrir todo el dia. Si pones horas, solo reemplaza las clases dentro de ese rango.
+            Marca “Más de un día” para indicar una fecha final; el valor se cobra una sola vez por todo el período. Deja las horas vacías para cubrir todo el día.
           </p>
         </form>
       </dialog>

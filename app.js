@@ -83,6 +83,7 @@ let tarifasDefaults = structuredClone(CFG.DEFAULT_TARIFAS || {});
 let tarifasDocentes = {};
 let tarifasLoaded = false;
 let jornadas = loadJornadas();
+let jornadasLoaded = false;
 let last = null; // { out, cats, totals, filtros, details }
 let modoRango = "26_25"; // "26_25" | "1_fin"
 let tarifaDocenteActivo = "";
@@ -240,9 +241,9 @@ function finalCategory(obj, participantCount = 1) {
   return base || "SIN_CATEGORIA";
 }
 
-function classCountKey(obj) {
+function classCountKey(obj, forceComposite = false) {
   const unique = norm(fieldFirst(obj, ["K", "k", "classUniqueId", "claseId", "claseKey"]));
-  if (unique) return unique;
+  if (unique && !forceComposite) return unique;
 
   const docente = keyDocente(fieldFirst(obj, ["profesor", "Profesor", "docente", "Docente"]));
   const servicio = upper(fieldFirst(obj, ["servicio", "Servicio", "categoria", "Categoria"]));
@@ -251,10 +252,18 @@ function classCountKey(obj) {
   return `${fecha}|${servicio}|${hora}|${docente}`;
 }
 
+function isMusifamiliarRecord(obj) {
+  const fields = ["servicio", "Servicio", "categoria", "Categoria", "clasif", "clasificacion", "clasificación", "L", "l", "P", "p"];
+  return fields.some((field) => {
+    const value = upper(obj?.[field]);
+    return value === "MF" || value.includes("MUSIFAMILIAR");
+  });
+}
+
 function participantCountsByClass(docs) {
   const counts = new Map();
   for (const obj of docs) {
-    const key = classCountKey(obj);
+    const key = classCountKey(obj, isMusifamiliarRecord(obj));
     if (!key) continue;
     counts.set(key, (counts.get(key) || 0) + 1);
   }
@@ -265,14 +274,34 @@ function isGroupCategory(cat) {
   return ["MH G", "MS G", "MV G"].includes(upper(cat));
 }
 
+// Musifamiliar se liquida como una clase grupal: varios alumnos del mismo
+// docente, servicio, fecha y hora representan una sola clase.
+function isGroupLikeCategory(cat) {
+  const key = upper(cat);
+  return isGroupCategory(key) || key === "MF" || key.includes("MUSIFAMILIAR");
+}
+
 function firestoreDocToRow(obj, participantCount = 1, qtyOverride = null) {
   const rawRow = obj.row || obj.cells || obj.valores || obj.values || obj.data;
-  if (Array.isArray(rawRow)) return rawRow.map(firestoreValueToCell);
+  // Los documentos antiguos pueden conservar la fila completa en `row`, pero
+  // guardar la hora en un campo aparte. No se puede devolver temprano porque
+  // se perdería esa hora y una jornada por franja absorbería todas las clases
+  // del día.
+  if (Array.isArray(rawRow)) {
+    const row = rawRow.map(firestoreValueToCell);
+    const hora = fieldFirst(obj, ["hora", "Hora", "horaInicio", "horaClase", "inicio", "startTime"]);
+    if (hora !== "") row._hora = firestoreValueToCell(hora);
+    return row;
+  }
 
   const cat = finalCategory(obj, participantCount);
   const row = [];
   row[3] = firestoreValueToCell(fieldFirst(obj, ["D", "d", "nombre", "Nombre", "estudiante", "Estudiante"]));
   row[CFG.IDX.FECHA] = firestoreValueToCell(fieldFirst(obj, ["E", "e", "fecha", "Fecha", "fechaRaw", "FechaRaw"]));
+  // Algunos documentos guardan la fecha y la hora en campos independientes.
+  // Conservamos la hora fuera de las columnas visibles para poder aplicar
+  // correctamente las jornadas por franja horaria.
+  row._hora = firestoreValueToCell(fieldFirst(obj, ["hora", "Hora", "horaInicio", "horaClase", "inicio", "startTime"]));
   row[CFG.IDX.DOCENTE] = firestoreValueToCell(fieldFirst(obj, ["H", "h", "docente", "Docente", "profesor", "Profesor"]));
   row[CFG.IDX.CANT] = firestoreValueToCell(qtyOverride ?? firestoreQty(obj));
   row[CFG.IDX.CAT] = firestoreValueToCell(cat);
@@ -392,12 +421,12 @@ function getFirestoreRows() {
   const countedGroupClasses = new Set();
 
   return docs.map((obj) => {
-    const key = classCountKey(obj);
+    const key = classCountKey(obj, isMusifamiliarRecord(obj));
     const participantCount = counts.get(key) || 1;
     const cat = finalCategory(obj, participantCount);
     let qty = firestoreQty(obj);
 
-    if (isGroupCategory(cat)) {
+    if (isGroupLikeCategory(cat)) {
       if (countedGroupClasses.has(key)) qty = 0;
       else {
         countedGroupClasses.add(key);
@@ -608,15 +637,64 @@ function saveJornadas() {
   localStorage.setItem(CFG.LS_KEY_JORNADAS, JSON.stringify(jornadas));
 }
 
+function jornadaDocRef() {
+  const db = initFirebase();
+  return db.collection(CFG.FIRESTORE_CONFIG_COLLECTION || "configuracion")
+    .doc(CFG.FIRESTORE_JORNADAS_DOC || "jornadas_docentes");
+}
+
+async function saveSharedJornadas() {
+  await ensureAuth();
+  await jornadaDocRef().set({
+    jornadas,
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+  }, { merge: true });
+  saveJornadas();
+  jornadasLoaded = true;
+}
+
+async function loadSharedJornadas() {
+  await ensureAuth();
+  const snap = await jornadaDocRef().get();
+  const remote = snap.exists && Array.isArray(snap.data()?.jornadas) ? snap.data().jornadas : null;
+  if (remote) {
+    jornadas = remote;
+    saveJornadas();
+  } else if (jornadas.length) {
+    // Migra las jornadas creadas antes de que existiera el guardado compartido.
+    await saveSharedJornadas();
+  }
+  jornadasLoaded = true;
+}
+
 function minutesFromTime(v) {
-  const t = norm(v);
+  if (v instanceof Date && !isNaN(v.getTime())) return v.getHours() * 60 + v.getMinutes();
+  const t = norm(v)
+    .replace(/\b(a\.?\s*m\.?)\b/gi, "AM")
+    .replace(/\b(p\.?\s*m\.?)\b/gi, "PM");
   if (!t) return null;
-  const m = t.match(/^(\d{1,2}):(\d{2})$/);
+  const m = t.match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
   if (!m) return null;
-  const hh = Number(m[1]);
-  const mm = Number(m[2]);
+  let hh = Number(m[1]);
+  const mm = Number(m[2] || 0);
+  const meridiem = (m[3] || "").toUpperCase();
+  if (meridiem === "PM" && hh < 12) hh += 12;
+  if (meridiem === "AM" && hh === 12) hh = 0;
   if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
   return hh * 60 + mm;
+}
+
+function parseRowDate(row) {
+  const date = parseDateFlexible(row?.[CFG.IDX.FECHA]);
+  if (!date) return null;
+
+  const time = minutesFromTime(row?._hora);
+  if (time === null) return date;
+
+  // La hora explícita del registro es la fuente correcta cuando viene en una
+  // columna separada de la fecha.
+  date.setHours(Math.floor(time / 60), time % 60, 0, 0);
+  return date;
 }
 
 function minutesFromDate(d) {
@@ -627,21 +705,29 @@ function minutesFromDate(d) {
 
 function jornadaLabel(j) {
   const hours = j.desde || j.hasta ? ` ${j.desde || "00:00"}-${j.hasta || "23:59"}` : "";
-  return `${j.fecha}${hours}`;
+  const periodo = j.fechaHasta ? `${j.fecha} a ${j.fechaHasta}` : j.fecha;
+  return `${periodo}${hours}`;
 }
 
 function jornadaMatches(j, kdoc, fecha) {
   if (!j || keyDocente(j.docente) !== kdoc) return false;
-  if (j.fecha !== ymd(fecha)) return false;
+  const dia = ymd(fecha);
+  const fechaHasta = j.fechaHasta || j.fecha;
+  if (dia < j.fecha || dia > fechaHasta) return false;
 
   const desde = minutesFromTime(j.desde);
   const hasta = minutesFromTime(j.hasta);
   if (desde === null && hasta === null) return true;
 
   const current = minutesFromDate(fecha);
-  if (current === null) return true;
+  // Una clase sin hora conocida no puede pertenecer con seguridad a una
+  // jornada por horario. Así no se incluyen por error las clases posteriores.
+  if (current === null) return false;
   if (desde !== null && current < desde) return false;
-  if (hasta !== null && current > hasta) return false;
+  // La jornada termina al comenzar la hora indicada. Por ejemplo, 09:00–12:00
+  // cubre clases desde las 09:00 hasta antes de las 12:00; una clase que inicia
+  // exactamente a las 12:00 se liquida con su tarifa habitual.
+  if (hasta !== null && current >= hasta) return false;
   return true;
 }
 
@@ -650,10 +736,14 @@ function findJornada(kdoc, fecha) {
 }
 
 function jornadaKeyFor(kdoc, j) {
-  return `${kdoc}||${j.fecha}||${j.desde || ""}||${j.hasta || ""}||${j.valor}`;
+  return `${kdoc}||${j.fecha}||${j.fechaHasta || ""}||${j.desde || ""}||${j.hasta || ""}||${j.valor}`;
 }
 
-function openJornadas() {
+async function openJornadas() {
+  if (!jornadasLoaded) {
+    setStatus("Cargando jornadas compartidas...", "warn");
+    await loadSharedJornadas();
+  }
   renderJornadasRows();
   el.dlgJornadas.showModal();
 }
@@ -668,6 +758,52 @@ function renderJornadasRows() {
   el.jornadasBody.innerHTML = jornadas.map(j => jornadaRowHtml(j)).join("");
 }
 
+function getLinkedClassesForJornada(jornada) {
+  if (!jornada?.docente || !jornada?.fecha || !firestoreDocsById.size) return [];
+  const linked = new Map();
+
+  getFirestoreRows().forEach((row) => {
+    const fecha = parseRowDate(row);
+    const docente = keyDocente(norm(row[CFG.IDX.DOCENTE]));
+    if (!fecha || !jornadaMatches(jornada, docente, fecha)) return;
+
+    const category = upper(row[CFG.IDX.CAT]) || "SIN CATEGORÍA";
+    const minute = minutesFromDate(fecha);
+    // Una clase grupal puede tener varias filas (un estudiante por fila): se
+    // muestra como una sola clase y se conservan todos los estudiantes.
+    const key = `${ymd(fecha)}|${minute ?? "sin-hora"}|${category}`;
+    if (!linked.has(key)) {
+      linked.set(key, {
+        fecha,
+        categoria: category,
+        estudiantes: new Set(),
+      });
+    }
+    const nombre = norm(row[3]);
+    if (nombre) linked.get(key).estudiantes.add(nombre);
+  });
+
+  return [...linked.values()].sort((a, b) => a.fecha - b.fecha);
+}
+
+function jornadaLinkedClassesHtml(jornada) {
+  if (!jornada?.docente || !jornada?.fecha) return '<span class="jornadaLinkedHint">Completa docente y fecha.</span>';
+  if (!firestoreDocsById.size) return '<span class="jornadaLinkedHint">Carga las clases para verlas.</span>';
+
+  const classes = getLinkedClassesForJornada(jornada);
+  if (!classes.length) return '<span class="jornadaLinkedHint">Sin clases vinculadas.</span>';
+
+  const entries = classes.map((item) => {
+    const day = item.fecha.toLocaleDateString('es-CO', { day: '2-digit', month: 'short' });
+    const minute = minutesFromDate(item.fecha);
+    const hour = minute === null ? 'Sin hora' : `${String(Math.floor(minute / 60)).padStart(2, '0')}:${String(minute % 60).padStart(2, '0')}`;
+    const students = [...item.estudiantes].join(', ') || 'Sin estudiante';
+    return `<li><strong>${escapeHtml(`${day} · ${hour}`)}</strong> · ${escapeHtml(item.categoria)}<br><span>${escapeHtml(students)}</span></li>`;
+  }).join('');
+
+  return `<details class="jornadaLinked"><summary>${classes.length} clase${classes.length === 1 ? '' : 's'}</summary><ul>${entries}</ul></details>`;
+}
+
 function jornadaRowHtml(j = {}) {
   const current = norm(j.docente || "");
   const names = Array.from(new Set([current, ...docentesAll])).filter(Boolean);
@@ -678,11 +814,13 @@ function jornadaRowHtml(j = {}) {
   return `
     <tr>
       <td><select class="rateInput jornadaDocente">${options}</select></td>
-      <td><input class="rateInput jornadaFecha" type="date" value="${escapeHtml(j.fecha || "")}"></td>
+      <td><input class="rateInput jornadaFecha" type="date" value="${escapeHtml(j.fecha || "")}" aria-label="Fecha inicial"></td>
+      <td><input class="rateInput jornadaValor" type="text" value="${Number(j.valor || 0)}" inputmode="numeric" placeholder="Ej. 120000" aria-label="Valor en pesos colombianos"></td>
+      <td class="jornadaPeriodo"><label class="jornadaMultidiaLabel"><input class="jornadaMultidia" type="checkbox" ${j.fechaHasta ? "checked" : ""}> Más de un día</label><input class="rateInput jornadaFechaHasta" type="date" value="${escapeHtml(j.fechaHasta || "")}" aria-label="Fecha final" ${j.fechaHasta ? "" : "disabled"}></td>
       <td><input class="rateInput jornadaDesde" type="time" value="${escapeHtml(j.desde || "")}"></td>
       <td><input class="rateInput jornadaHasta" type="time" value="${escapeHtml(j.hasta || "")}"></td>
-      <td><input class="rateInput jornadaValor" type="text" value="${Number(j.valor || 0)}" inputmode="numeric" placeholder="0"></td>
       <td><input class="rateInput jornadaNota" type="text" value="${escapeHtml(j.nota || "")}" placeholder="4h, 8h..."></td>
+      <td class="jornadaLinkedCell">${jornadaLinkedClassesHtml(j)}</td>
       <td><button class="rateDel jornadaDel" type="button" title="Eliminar">X</button></td>
     </tr>
   `;
@@ -695,26 +833,40 @@ function addJornadaRow(j = {}) {
   el.jornadasBody.appendChild(tr);
 }
 
-function saveJornadasFromUI() {
+async function saveJornadasFromUI() {
   try {
     const fixed = [];
     const rows = Array.from(el.jornadasBody.querySelectorAll("tr"));
     for (const row of rows) {
       const docente = norm(row.querySelector(".jornadaDocente")?.value || "");
       const fecha = norm(row.querySelector(".jornadaFecha")?.value || "");
+      const esMultidia = Boolean(row.querySelector(".jornadaMultidia")?.checked);
+      const fechaHasta = esMultidia ? norm(row.querySelector(".jornadaFechaHasta")?.value || "") : "";
       const desde = norm(row.querySelector(".jornadaDesde")?.value || "");
       const hasta = norm(row.querySelector(".jornadaHasta")?.value || "");
-      const valor = parseRateValue(row.querySelector(".jornadaValor")?.value || "0");
+      const valorInput = row.querySelector(".jornadaValor");
+      const valor = parseRateValue(valorInput?.value || "0");
       const nota = norm(row.querySelector(".jornadaNota")?.value || "");
-      if (!docente && !fecha && !valor) continue;
-      if (!docente || !fecha || !valor) throw new Error("Cada jornada necesita docente, fecha y valor.");
-      fixed.push({ docente, fecha, desde, hasta, valor, nota });
+      if (!docente && !fecha && !fechaHasta && !valor) continue;
+      if (!docente || !fecha || !valor) {
+        const missing = !docente ? row.querySelector(".jornadaDocente") : !fecha ? row.querySelector(".jornadaFecha") : valorInput;
+        missing?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+        missing?.focus();
+        throw new Error("Cada jornada necesita docente, fecha y valor. Escribe el valor en la columna Valor (COP).");
+      }
+      if (esMultidia && !fechaHasta) throw new Error("Las jornadas de más de un día necesitan fecha final.");
+      if (fechaHasta && fechaHasta < fecha) throw new Error("La fecha final no puede ser anterior a la fecha inicial.");
+      fixed.push({ docente, fecha, fechaHasta, desde, hasta, valor, nota });
     }
     jornadas = fixed;
-    saveJornadas();
-    setStatus("Jornadas guardadas.", "ok");
+    await saveSharedJornadas();
+    if (el.dlgJornadas?.open) renderJornadasRows();
+    setStatus("Jornadas guardadas en Firebase.", "ok");
+    return true;
   } catch (e) {
-    setStatus("Jornadas invalidas: " + (e.message || e), "danger");
+    console.error("No se pudieron guardar las jornadas en Firebase:", e);
+    setStatus("No se pudieron guardar las jornadas: " + (e.message || e), "danger");
+    return false;
   }
 }
 
@@ -841,8 +993,17 @@ function openDetalle(docenteDisplay, cat) {
     const f = ymd(x.fecha);
     const nombreBase = norm(x.nombre) || "(Sin nombre)";
     const nombre = x.jornada ? `${nombreBase} · ${x.jornada} · ${money(x.valor || 0)}` : nombreBase;
+    const linkedClasses = (x.clases || []).map((clase) => {
+      const minute = minutesFromDate(clase.fecha);
+      const hour = minute === null ? "Sin hora" : `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+      const students = clase.estudiantes.join(", ") || "Sin estudiante";
+      return `<li><strong>${escapeHtml(`${ymd(clase.fecha)} · ${hour}`)}</strong> · ${escapeHtml(clase.categoria)}<br><span>${escapeHtml(students)}</span></li>`;
+    }).join("");
+    const linkedHtml = linkedClasses
+      ? `<details class="detalleJornadaClases"><summary>${x.clases.length} clase${x.clases.length === 1 ? "" : "s"} vinculada${x.clases.length === 1 ? "" : "s"}</summary><ul>${linkedClasses}</ul></details>`
+      : "";
     return `<tr>
-      <td>${escapeHtml(nombre)}</td>
+      <td>${escapeHtml(nombre)}${linkedHtml}</td>
       <td>${f}</td>
       <td style="text-align:right;">${formatQty(x.qty)}</td>
     </tr>`;
@@ -978,7 +1139,7 @@ function calcularConDatos(data, options = {}) {
       const kdoc = keyDocente(docenteDisplay);
       if (selectedKeys && !selectedKeys.has(kdoc)) continue;
 
-      const fecha = parseDateFlexible(r[CFG.IDX.FECHA]);
+      const fecha = parseRowDate(r);
       if (!fecha) { dropBadDate++; continue; }
 
       if (filtros.desde && fecha < filtros.desde) { dropOutRange++; continue; }
@@ -1007,18 +1168,36 @@ function calcularConDatos(data, options = {}) {
 
       if (jornada) {
         const jornadaKey = jornadaKeyFor(kdoc, jornada);
-        if (!appliedJornadas.has(jornadaKey)) {
-          appliedJornadas.add(jornadaKey);
-          row.cats.JORNADA = (row.cats.JORNADA || 0) + 1;
-          row.totalQty += 1;
-          row.fixedValue += Number(jornada.valor || 0);
-          details.get(keyDetail).push({
+        let jornadaDetail = details.get(keyDetail).find((item) => item.jornadaKey === jornadaKey);
+        if (!jornadaDetail) {
+          jornadaDetail = {
             nombre: jornada.nota || "Jornada",
             fecha,
             qty: 1,
             valor: Number(jornada.valor || 0),
             jornada: jornadaLabel(jornada),
-          });
+            jornadaKey,
+            clases: [],
+          };
+          details.get(keyDetail).push(jornadaDetail);
+        }
+
+        // Agrupa las filas de una clase grupal y deja en el detalle todos los
+        // estudiantes que pertenecen a esa misma sesión.
+        const category = upper(r[CFG.IDX.CAT]) || "SIN CATEGORÍA";
+        const classKey = `${ymd(fecha)}|${minutesFromDate(fecha) ?? "sin-hora"}|${category}`;
+        let linkedClass = jornadaDetail.clases.find((item) => item.key === classKey);
+        if (!linkedClass) {
+          linkedClass = { key: classKey, fecha, categoria: category, estudiantes: [] };
+          jornadaDetail.clases.push(linkedClass);
+        }
+        if (nombre && !linkedClass.estudiantes.includes(nombre)) linkedClass.estudiantes.push(nombre);
+
+        if (!appliedJornadas.has(jornadaKey)) {
+          appliedJornadas.add(jornadaKey);
+          row.cats.JORNADA = (row.cats.JORNADA || 0) + 1;
+          row.totalQty += 1;
+          row.fixedValue += Number(jornada.valor || 0);
         }
       } else {
         row.cats[cat] = (row.cats[cat] || 0) + qty;
@@ -1033,8 +1212,10 @@ function calcularConDatos(data, options = {}) {
       if (selectedKeys && !selectedKeys.has(kdoc)) continue;
 
       const fecha = parseDateFlexible(jornada.fecha);
-      if (!fecha) continue;
-      if (filtros.desde && fecha < filtros.desde) continue;
+      const fechaHasta = parseDateFlexible(jornada.fechaHasta || jornada.fecha);
+      if (!fecha || !fechaHasta) continue;
+      // El período se incluye si tiene al menos un día dentro del filtro actual.
+      if (filtros.desde && fechaHasta < filtros.desde) continue;
       if (filtros.hasta && fecha > filtros.hasta) continue;
 
       const jornadaKey = jornadaKeyFor(kdoc, jornada);
@@ -1127,6 +1308,10 @@ async function cargarYCalcular() {
     if (!tarifasLoaded) {
       setStatus("Cargando tarifas compartidas...", "warn");
       await loadSharedTarifas();
+    }
+    if (!jornadasLoaded) {
+      setStatus("Cargando jornadas compartidas...", "warn");
+      await loadSharedJornadas();
     }
     calcularConDatos(getFirestoreRows());
   } catch (err) {
@@ -1755,11 +1940,22 @@ function setup() {
       tr.remove();
       if (!el.jornadasBody.querySelector("tr")) addJornadaRow();
     });
+    el.jornadasBody.addEventListener("change", (ev) => {
+      const check = ev.target.closest(".jornadaMultidia");
+      if (!check) return;
+      const fechaHasta = check.closest("tr")?.querySelector(".jornadaFechaHasta");
+      if (!fechaHasta) return;
+      fechaHasta.disabled = !check.checked;
+      if (check.checked) fechaHasta.focus();
+    });
   }
 
-  if (el.btnGuardarJornadas) el.btnGuardarJornadas.addEventListener("click", () => {
-    saveJornadasFromUI();
-    recalcularSiHayDatos();
+  if (el.btnGuardarJornadas) el.btnGuardarJornadas.addEventListener("click", async (ev) => {
+    ev.preventDefault();
+    el.btnGuardarJornadas.disabled = true;
+    const saved = await saveJornadasFromUI();
+    el.btnGuardarJornadas.disabled = false;
+    if (saved) recalcularSiHayDatos();
   });
 
   if (el.btnGuardarTarifas) el.btnGuardarTarifas.addEventListener("click", async () => {
