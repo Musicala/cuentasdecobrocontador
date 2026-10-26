@@ -214,12 +214,64 @@ function serviceBaseCategory(obj) {
   return key;
 }
 
+function explicitServiceCategory(key) {
+  const value = upper(key);
+  const families = [
+    { code: "MV", name: "MUSICALA VIRTUAL" },
+    { code: "MH", name: "MUSICALA HOGAR" },
+    { code: "MS", name: "MUSICALA SEDE" },
+  ];
+
+  for (const { code, name } of families) {
+    const belongsToFamily = value.includes(name) || value.startsWith(code);
+    if (!belongsToFamily) continue;
+    if (new RegExp(`\\b${code}\\s*G\\b`).test(value) || value.includes("GRUP")) return `${code} G`;
+    if (new RegExp(`\\b${code}\\s*P\\b`).test(value) || value.startsWith(`${code}:`) || value.includes("PERSONAL")) return `${code} P`;
+  }
+
+  return "";
+}
+
+// Un taller puede tener una sola fila aunque atienda a un grupo completo.
+// La clasificación genérica "Taller" no debe ocultar su modalidad real.
+function workshopCategory(obj, participantCount = 1) {
+  const rawRow = obj.row || obj.cells || obj.valores || obj.values || obj.data;
+  const fields = ["L", "l", "clasificacion", "clasificación", "clasifFinal", "clasif",
+    "F", "f", "servicio", "Servicio", "categoria", "Categoria",
+    "P", "p", "modalidad", "Modalidad", "ubicacion", "ubicación", "sede"];
+  const values = fields.map(field => upper(obj?.[field])).filter(Boolean);
+  if (Array.isArray(rawRow)) {
+    [5, 11, CFG.IDX.CAT].forEach(index => {
+      if (rawRow[index]) values.push(upper(rawRow[index]));
+    });
+  }
+  if (!values.some(value => value.includes("TALLER"))) return "";
+
+  // Revisar primero la clasificación y después los datos del servicio.
+  for (const value of values) {
+    let family = "";
+    if (/\bMV\b|MUSICALA VIRTUAL|VIRTUAL/.test(value)) family = "MV";
+    else if (/\bMH\b|MUSICALA HOGAR|DOMICILIO|HOGAR/.test(value)) family = "MH";
+    else if (/\bMS\b|MUSICALA SEDE|\bSEDE\b/.test(value)) family = "MS";
+    if (!family) continue;
+    if (family === "MS") return "MS G";
+    const explicit = explicitServiceCategory(`${family} ${value}`);
+    return explicit || `${family} ${participantCount > 1 ? "G" : "P"}`;
+  }
+
+  // Taller sin modalidad: conservar sede como respaldo, siempre grupal.
+  return "MS G";
+}
+
 function finalCategory(obj, participantCount = 1) {
   const tipo = upper(fieldFirst(obj, ["O", "o", "tipo", "Tipo"]));
   const servicio = norm(fieldFirst(obj, ["F", "f", "servicio", "Servicio", "categoria", "Categoria"]));
   const servicioKey = upper(servicio);
 
+  const taller = workshopCategory(obj, participantCount);
+
   if (tipo === "PAGO") {
+    if (taller) return taller;
     if (servicioKey.includes("MUSICALA VIRTUAL") || servicioKey.startsWith("MV")) return servicioKey.includes(" G") ? "MV G" : "MV P";
     if (servicioKey.includes("MUSICALA HOGAR") || servicioKey.startsWith("MH")) return servicioKey.includes(" G") ? "MH G" : "MH P";
     if (servicioKey.includes("MUSICALA SEDE") || servicioKey.startsWith("MS")) return servicioKey.includes(" G") ? "MS G" : "MS P";
@@ -231,6 +283,7 @@ function finalCategory(obj, participantCount = 1) {
 
   const clasif = upper(fieldFirst(obj, ["J", "j", "clasif", "clasificacion", "clasificación"]));
   if (clasif === "MULTA") return "MULTA";
+  if (taller) return taller;
 
   const base = serviceBaseCategory(obj);
   if (base === "MV G" || base === "MV P") return participantCount > 1 ? "MV G" : "MV P";
