@@ -200,9 +200,8 @@ function serviceCategoryKey(obj) {
   return (!clasifRaw || USELESS_CLASIF.test(clasifRaw)) ? servicioRaw : clasifRaw;
 }
 
-// Si RIP ya indica de forma explícita P o G, esa clasificación manda. El
-// número de filas de una sesión solo sirve para inferir la modalidad cuando
-// el servicio viene genérico (por ejemplo, simplemente "Musicala Sede").
+// Conserva la modalidad explícita del RIP. Al liquidar, una grupal con
+// un solo integrante se convierte a personalizada en finalCategory.
 function explicitServiceCategory(key) {
   const value = upper(key);
   const families = [
@@ -270,7 +269,7 @@ function workshopCategory(obj, participantCount = 1) {
   return "MS G";
 }
 
-function finalCategory(obj, participantCount = 1) {
+function declaredCategory(obj, participantCount = 1) {
   const tipo = upper(fieldFirst(obj, ["O", "o", "tipo", "Tipo"]));
   const servicio = norm(fieldFirst(obj, ["F", "f", "servicio", "Servicio", "categoria", "Categoria"]));
   const servicioKey = upper(servicio);
@@ -301,6 +300,20 @@ function finalCategory(obj, participantCount = 1) {
   if (base === "TALLER" || base === "ENSAMBLE") return participantCount > 1 ? "MS G" : "MS P";
   if (base === "TV") return "MS G";
   return base || "SIN_CATEGORIA";
+}
+
+// La tarifa grupal requiere al menos dos integrantes de la misma sesión.
+// Aplica también a categorías explícitas, pagos, talleres y filas antiguas.
+function finalCategory(obj, participantCount = 1) {
+  let category = declaredCategory(obj, participantCount);
+  if (category === "SIN_CATEGORIA") {
+    const row = obj.row || obj.cells || obj.valores || obj.values || obj.data;
+    if (Array.isArray(row)) category = upper(row[CFG.IDX.CAT]) || category;
+  }
+  if (participantCount <= 1 && /^(MS|MH|MV) G$/.test(category)) {
+    return category.replace(/ G$/, " P");
+  }
+  return category;
 }
 
 function classCountKey(obj, forceComposite = false) {
