@@ -597,3 +597,11 @@ button.flujo:hover {
 .cuentasCard textarea { padding: 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; resize: vertical; }
 .cuentasCard label, #driveMes, #driveUrl { margin-top: 12px; }
 #cuentaEstado, #driveEstado { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+#dlgFlujo { max-width: 1100px; }
+#dlgFlujo .dlgCard { width: 100%; box-sizing: border-box; }
+.flujoAccount { min-width: 250px; max-width: 420px; white-space: normal; }
+.flujoAccount input[type="file"] { width: 100%; font-size: 12px; }
+.flujoAccount textarea { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; resize: vertical; }
+.flujoAccount summary { cursor: pointer; margin: 8px 0; font-size: 12px; }
+.flujoAccount .hint { overflow-wrap: anywhere; }

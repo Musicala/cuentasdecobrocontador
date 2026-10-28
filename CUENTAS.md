@@ -1,9 +1,9 @@
 # Cuentas recibidas
 
-1. Cargar y calcular el mes. En Ajustes de Drive seleccionar el mes y guardar el enlace de la carpeta de los contadores.
-2. En Cuentas recibidas seleccionar el docente y un PDF con texto o Word .docx. Revisar y editar el texto extraído.
-3. Guardar cuenta para enviar. El archivo queda pendiente en IndexedDB de este navegador, separado por docente y mes. No se sube todavía a Drive. También se acepta pegar un enlace si el archivo ya está en Drive.
-4. Enviar a Flujo de Caja. Al pulsar Guardar en Flujo, se autoriza Google si hay archivos pendientes, se sube cada archivo a la carpeta de su mes y se guarda el registro con observaciones, cuentaCobroUrl y cuentaCobroArchivo. Si falta carpeta, falta un adjunto marcado como pendiente o falla Drive, no se inicia la escritura de egresos. Para registros existentes usar Reemplazar. Los importes siguen saliendo del cálculo del RIP; el documento no modifica el valor automáticamente.
+1. En Ajustes de Drive elegir cada mes y guardar el enlace de su carpeta. Es una sola carpeta por mes, compartida por todos los docentes.
+2. Cargar y calcular el mes; pulsar Flujo de Caja.
+3. En la misma ventana marcar los docentes a enviar y adjuntar la cuenta PDF o Word .docx de cada uno. El selector lee el texto automáticamente y conserva el archivo en este navegador. Revisar o editar las observaciones en la fila del docente. No existe un paso separado de Cuentas recibidas ni un botón de guardar adjuntos.
+4. Pulsar Guardar en Flujo. Se pide autorización de Google si corresponde, se suben los archivos a la carpeta común del mes y se guardan los egresos con observaciones y enlaces. Es obligatorio contar con un adjunto o un soporte ya subido por cada docente seleccionado. Si falta carpeta, falta cuenta o falla Drive, no se inicia la escritura de egresos. Para registros existentes usar Reemplazar. Los importes siguen saliendo del cálculo del RIP; el documento no modifica el valor automáticamente.
 
 Las observaciones, los enlaces de los soportes y las carpetas mensuales se guardan en Firestore de flujo-de-caja-musicala. La autenticación de Drive también usa ese proyecto (la app Firebase llamada flujo). RIP conserva clases, tarifas y jornadas.
 

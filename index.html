@@ -63,7 +63,6 @@
         <button id="btnCargar" class="primary">Cargar &amp; Calcular</button>
         <button id="btnExport" class="ghost">Export CSV</button>
         <button id="btnFlujo" class="flujo">💸 Flujo de Caja</button>
-        <button id="btnCuentas" class="ghost" type="button">📎 Cuentas recibidas</button>
         <button id="btnAjustesDrive" class="ghost" type="button">⚙ Ajustes de Drive</button>
       </div>
 
@@ -239,6 +238,8 @@
         Los registros ya existentes para ese mes <b>no se sobrescriben</b> a menos que elijas reemplazarlos.
       </div>
 
+      <p id="flujoCarpeta" class="hint">Una carpeta compartida por mes para todos los docentes.</p>
+      <p class="hint">Marca los docentes que vas a enviar y adjunta aquí sus cuentas PDF o Word .docx. Revisa las observaciones y pulsa Guardar en Flujo.</p>
       <div class="flujoStatusBar" id="flujoStatusBar" hidden>
         <span id="flujoStatusTxt"></span>
       </div>
@@ -249,6 +250,7 @@
             <tr>
               <th style="text-align:left;">Docente</th>
               <th style="text-align:right;">Valor cuenta de cobro</th>
+              <th>Cuenta de cobro y observaciones</th>
               <th style="text-align:center;">Estado</th>
             </tr>
           </thead>

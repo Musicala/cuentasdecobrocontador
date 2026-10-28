@@ -1700,8 +1700,9 @@ function flujoSetStatus(txt, kind = "warn") {
 function flujoRenderRows(rows) {
   el.flujoBody.innerHTML = rows.map(r => `
     <tr>
-      <td><strong>${escapeHtml(r.docente)}</strong></td>
+      <td><label class="flujoCheck"><input type="checkbox" data-flujo-id="${escapeHtml(r.id)}" ${r.selected === false ? "" : "checked"}><strong>${escapeHtml(r.docente)}</strong></label></td>
       <td style="text-align:right;">${money(r.valor)}</td>
+      <td>${window.cuentasCobro?.renderCuenta(r, `${el.flujoGuardar._año}-${String(el.flujoGuardar._mes).padStart(2, "0")}`) || "Cargando lector…"}</td>
       <td style="text-align:center;"><span class="badge ${r.badge}">${escapeHtml(r.estado)}</span></td>
     </tr>
   `).join("");
@@ -1774,6 +1775,9 @@ async function abrirDialogFlujo() {
     id:      flujoDocId(año, mes, r.docente),
   }));
 
+  el.flujoGuardar._rows = rows;
+  el.flujoGuardar._año = año;
+  el.flujoGuardar._mes = mes;
   flujoRenderRows(rows);
   el.dlgFlujo.showModal();
 
@@ -1805,6 +1809,8 @@ async function comprobarFlujoRows(rows, año, mes) {
       }
     });
 
+    if (!window.cuentasCobro) throw new Error("No cargó el lector. Recarga la página.");
+    await window.cuentasCobro.cargar(año, mes, rows);
     flujoRenderRows(rows);
     el.flujoOpts.hidden    = false;
     el.flujoGuardar.disabled = false;
@@ -1835,7 +1841,7 @@ async function guardarEnFlujo() {
 
   if (!rows?.length) return;
 
-  const toSave = rows.filter(r => r.badge === "nuevo" || (reemplazar && r.badge === "existe"));
+  const toSave = rows.filter(r => r.selected !== false && (r.badge === "nuevo" || (reemplazar && r.badge === "existe")));
   if (!toSave.length) {
     flujoSetStatus("Nada que guardar. Activa 'Reemplazar' si quieres sobrescribir los existentes.", "warn");
     return;
@@ -1848,6 +1854,7 @@ async function guardarEnFlujo() {
   try {
     const db  = initFlujoFirebase();
     if (!window.cuentasCobro) throw new Error("No cargó el lector de cuentas. Recarga la página antes de enviar.");
+    window.cuentasCobro.setEnviando(true);
     const soportes = await window.cuentasCobro.prepararEnvio(año, mes, toSave, txt => flujoSetStatus(txt, "warn"));
     const col = CFG.FLUJO_COLLECTION;
     const mesNombre = monthNameEs(mes);
@@ -1886,6 +1893,7 @@ async function guardarEnFlujo() {
   } finally {
     el.flujoGuardar.disabled   = false;
     el.flujoComprobar.disabled = false;
+    window.cuentasCobro?.setEnviando(false);
   }
 }
 
@@ -1967,6 +1975,12 @@ function setup() {
     const rows = el.flujoGuardar._rows;
     const { año, mes } = getMesAño();
     if (rows) comprobarFlujoRows(rows, año, mes);
+  });
+  el.flujoBody.addEventListener("change", ev => {
+    const checkbox = ev.target.closest("[data-flujo-id]");
+    if (!checkbox) return;
+    const row = el.flujoGuardar._rows?.find(r => r.id === checkbox.dataset.flujoId);
+    if (row) row.selected = checkbox.checked;
   });
   if (el.flujoGuardar) el.flujoGuardar.addEventListener("click", guardarEnFlujo);
 

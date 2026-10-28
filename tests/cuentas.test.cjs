@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 function harness(data = {}) {
   const elements = new Map();
-  const element = () => ({ value: '', disabled: false, hidden: false, innerHTML: '', addEventListener() {}, querySelector() { return element(); }, showModal() {} });
+  const element = () => ({ value: '', disabled: false, hidden: false, innerHTML: '', listeners: {}, addEventListener(type, callback) { this.listeners[type] = callback; }, querySelectorAll() { return []; }, querySelector() { return element(); }, showModal() {} });
   const reads = [];
   const writes = [];
   const context = vm.createContext({
@@ -14,7 +14,7 @@ function harness(data = {}) {
     getMesAño: () => ({ año: 2026, mes: 10 }), ensureAuth: async () => { throw Error("No usar autenticación RIP"); },
     ensureFlujoAuth: async () => {},
     initFirebase: () => { throw Error("No usar Firestore RIP"); },
-    initFlujoFirebase: () => ({ collection: c => ({ doc: id => ({ set: async value => { writes.push([c, id, value]); }, get: async () => { reads.push([c, id]); if (data.error) throw Error('sin permisos'); return { data: () => data[id] }; } }) }) })
+    initFlujoFirebase: () => ({ collection: c => ({ doc: id => ({ set: async (value, options) => { writes.push([c, id, value]); data[id] = options?.merge ? { ...data[id], ...value } : value; }, get: async () => { reads.push([c, id]); if (data.error) throw Error('sin permisos'); return { data: () => data[id] }; } }) }) })
   });
   vm.runInContext(fs.readFileSync('cuentas.js', 'utf8'), context);
   return { context, reads, writes, elements };
@@ -40,21 +40,14 @@ test('un error de lectura impide enviar sin las observaciones', async () => {
   await assert.rejects(context.window.cuentasCobro.observaciones(2026, 10, [{ id: 'ana', docente: 'Ana' }]), /sin permisos/);
 });
 
-test('guardar cuenta y carpeta escribe en Flujo sin acceder a RIP', async () => {
+test('guardar carpeta escribe en Flujo sin acceder a RIP', async () => {
   const { context, writes, elements } = harness(); context.URL = URL;
-  vm.runInContext("activeMonth = '2026-10'; activeTeacher = 'Ana';", context);
-  context.document.querySelector('#cuentaTexto').value = 'Cuenta revisada';
-  context.document.querySelector('#cuentaEnlace').value = 'https://drive.google.com/file/d/abc/view';
-  await elements.get('#cuentaGuardar').onclick();
   elements.get('#driveMes').value = '2026-10';
   context.document.querySelector('#driveUrl').value = 'https://drive.google.com/drive/folders/octubre';
   await elements.get('#driveGuardar').onclick();
-  assert.equal(writes.length, 2);
-  assert.equal(writes[0][0], 'cuentas_docentes');
-  assert.equal(writes[0][1], '2026-10_ANA');
-  assert.equal(writes[0][2].observaciones, 'Cuenta revisada');
-  assert.equal(writes[1][0], 'configuracion');
-  assert.equal(writes[1][1], 'drive_cuentas_2026-10');
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0][0], 'configuracion');
+  assert.equal(writes[0][1], 'drive_cuentas_2026-10');
 });
 
 function queueHarness(data, queued = {}) {
@@ -67,7 +60,7 @@ function queueHarness(data, queued = {}) {
     for (const [key, value] of Object.entries(queued)) pendingFiles.set(key, value);
     pendingWrite = async (key, value) => { if (value) pendingFiles.set(key, value); else pendingFiles.delete(key); };
     driveToken = async () => { authorizations++; return 'token'; };
-    uploadFile = async (file, folder, token) => { uploads.push({ name: file.name, folder, token }); return 'https://drive.google.com/file/d/uploaded/view'; };
+    uploadFile = async (file, folder, token, displayName) => { uploads.push({ name: file.name, folder, token, displayName }); return 'https://drive.google.com/file/d/uploaded/view'; };
   `, h.context);
   return h;
 }
@@ -104,4 +97,37 @@ test('reintento conserva la URL y no duplica una subida ya completada', async ()
   assert.equal(h.context.uploads.length, 0);
   assert.equal(h.context.authorizations, 0);
   assert.equal(h.writes[0][2].archivoUrl, 'https://drive.google.com/file/d/existing/view');
+});
+
+test('dos docentes se suben a una misma carpeta y llevan sus propias observaciones', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' } }, { '2026-10_ANA': { file: { name: 'ana.pdf' } }, '2026-10_LUIS': { file: { name: 'luis.pdf' } } });
+  vm.runInContext("drafts.set('2026-10_ANA', { observaciones: 'Cuenta Ana' }); drafts.set('2026-10_LUIS', { observaciones: 'Cuenta Luis' });", h.context);
+  const result = await h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana', id: 'ana' }, { docente: 'Luis', id: 'luis' }]);
+  assert.equal(h.context.uploads.length, 2);
+  assert.equal(h.context.uploads[0].folder, h.context.uploads[1].folder);
+  assert.equal(h.context.uploads[0].displayName, '2026-10 - Ana - ana.pdf');
+  assert.equal(h.context.uploads[1].displayName, '2026-10 - Luis - luis.pdf');
+  assert.match(result.ana.observaciones, /^Cuenta Ana/);
+  assert.match(result.luis.observaciones, /^Cuenta Luis/);
+});
+test('el envío exige adjuntar la cuenta del docente', async () => {
+  const h = queueHarness({});
+  await assert.rejects(h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana' }]), /Adjunta la cuenta/);
+  assert.equal(h.writes.length, 0);
+});
+test('el selector de archivos vive dentro de Flujo y lee Word sin guardar aparte', async () => {
+  const h = queueHarness({});
+  await vm.runInContext('pendingReady', h.context);
+  vm.runInContext('pendingError = null;', h.context);
+  h.context.window.mammoth = { extractRawText: async () => ({ value: 'Servicios del docente' }) };
+  h.context.file = { name: 'ana.docx', size: 100, arrayBuffer: async () => new ArrayBuffer(1) };
+  vm.runInContext("drafts.set('2026-10_ANA', { docente: 'Ana', mes: '2026-10' });", h.context);
+  const event = { target: { matches: () => true, files: [h.context.file], closest: () => ({ dataset: { cuentaKey: '2026-10_ANA' } }) } };
+  await h.elements.get('#flujoBody').listeners.change(event);
+  assert.equal(vm.runInContext("drafts.get('2026-10_ANA').observaciones", h.context), 'Servicios del docente');
+  assert.equal(vm.runInContext("pendingFiles.get('2026-10_ANA').file.name", h.context), 'ana.docx');
+  const markup = h.context.window.cuentasCobro.renderCuenta({ docente: 'Ana' }, '2026-10');
+  assert.match(markup, /data-cuenta-file/);
+  assert.match(markup, /Servicios del docente/);
+  assert.doesNotMatch(fs.readFileSync('index.html', 'utf8'), /id="btnCuentas"/);
 });
