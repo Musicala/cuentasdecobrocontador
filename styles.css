@@ -592,3 +592,8 @@ button.flujo:hover {
 ::-webkit-scrollbar-track { background: transparent }
 ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 99px }
 ::-webkit-scrollbar-thumb:hover { background: #94a3b8 }
+
+.cuentasCard select, .cuentasCard textarea, #driveUrl { width: 100%; box-sizing: border-box; }
+.cuentasCard textarea { padding: 12px; border: 1px solid var(--line); border-radius: 10px; font: inherit; resize: vertical; }
+.cuentasCard label, #driveMes, #driveUrl { margin-top: 12px; }
+#cuentaEstado, #driveEstado { white-space: pre-wrap; overflow-wrap: anywhere; }

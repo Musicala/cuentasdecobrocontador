@@ -194,26 +194,15 @@ function firestoreQty(obj) {
 
 const USELESS_CLASIF = /^(NO\s*CLASIF|SIN\s*CATEG|SIN\s*CLASIF|NO\s*CATEG)/;
 
-function serviceBaseCategory(obj) {
+function serviceCategoryKey(obj) {
   const clasifRaw = upper(norm(fieldFirst(obj, ["L", "l", "clasificacion", "clasificación", "clasifFinal", "clasif"])));
   const servicioRaw = upper(norm(fieldFirst(obj, ["servicio", "Servicio", "categoria", "Categoria", "F", "f"])));
-  const key = (!clasifRaw || USELESS_CLASIF.test(clasifRaw)) ? servicioRaw : clasifRaw;
-
-  if (!key) return "";
-  if (key === "TV") return "TV";
-  if (key.startsWith("MV:")) return "MV P";
-  if (key.startsWith("MH:")) return "MH P";
-  if (key.startsWith("MS:")) return "MS P";
-  if (key.startsWith("ME:") || key.includes("MUSICALA ESPACIOS")) return "MS P";
-  if (key.includes("MUSICALA VIRTUAL") || key.startsWith("MV")) return /\bMV\s*G\b|GRUP/.test(key) ? "MV G" : "MV P";
-  if (key.includes("MUSICALA HOGAR") || key.startsWith("MH")) return /\bMH\s*G\b|GRUP/.test(key) ? "MH G" : "MH P";
-  if (key.includes("MUSICALA SEDE") || key.startsWith("MS")) return /\bMS\s*G\b|GRUP/.test(key) ? "MS G" : "MS P";
-  if (key.includes("SPACES")) return "SPACES";
-  if (key.includes("TALLER")) return "TALLER";
-  if (key.includes("ENSAMBLE") || key.includes("ENSEMBLE")) return "ENSAMBLE";
-  return key;
+  return (!clasifRaw || USELESS_CLASIF.test(clasifRaw)) ? servicioRaw : clasifRaw;
 }
 
+// Si RIP ya indica de forma explícita P o G, esa clasificación manda. El
+// número de filas de una sesión solo sirve para inferir la modalidad cuando
+// el servicio viene genérico (por ejemplo, simplemente "Musicala Sede").
 function explicitServiceCategory(key) {
   const value = upper(key);
   const families = [
@@ -230,6 +219,24 @@ function explicitServiceCategory(key) {
   }
 
   return "";
+}
+
+function serviceBaseCategory(obj) {
+  const key = serviceCategoryKey(obj);
+
+  if (!key) return "";
+  if (key === "TV") return "TV";
+  if (key.startsWith("MV:")) return "MV P";
+  if (key.startsWith("MH:")) return "MH P";
+  if (key.startsWith("MS:")) return "MS P";
+  if (key.startsWith("ME:") || key.includes("MUSICALA ESPACIOS")) return "MS P";
+  if (key.includes("MUSICALA VIRTUAL") || key.startsWith("MV")) return /\bMV\s*G\b|GRUP/.test(key) ? "MV G" : "MV P";
+  if (key.includes("MUSICALA HOGAR") || key.startsWith("MH")) return /\bMH\s*G\b|GRUP/.test(key) ? "MH G" : "MH P";
+  if (key.includes("MUSICALA SEDE") || key.startsWith("MS")) return /\bMS\s*G\b|GRUP/.test(key) ? "MS G" : "MS P";
+  if (key.includes("SPACES")) return "SPACES";
+  if (key.includes("TALLER")) return "TALLER";
+  if (key.includes("ENSAMBLE") || key.includes("ENSEMBLE")) return "ENSAMBLE";
+  return key;
 }
 
 // Un taller puede tener una sola fila aunque atienda a un grupo completo.
@@ -286,6 +293,8 @@ function finalCategory(obj, participantCount = 1) {
   if (taller) return taller;
 
   const base = serviceBaseCategory(obj);
+  const explicitCategory = explicitServiceCategory(serviceCategoryKey(obj));
+  if (explicitCategory) return explicitCategory;
   if (base === "MV G" || base === "MV P") return participantCount > 1 ? "MV G" : "MV P";
   if (base === "MH G" || base === "MH P") return participantCount > 1 ? "MH G" : "MH P";
   if (base === "MS G" || base === "MS P") return participantCount > 1 ? "MS G" : "MS P";
@@ -344,6 +353,12 @@ function firestoreDocToRow(obj, participantCount = 1, qtyOverride = null) {
     const row = rawRow.map(firestoreValueToCell);
     const hora = fieldFirst(obj, ["hora", "Hora", "horaInicio", "horaClase", "inicio", "startTime"]);
     if (hora !== "") row._hora = firestoreValueToCell(hora);
+    // Algunos documentos conservan una copia vieja de P dentro de `row`, pero
+    // también tienen los campos normalizados actuales. En ese caso usamos la
+    // clasificación recalculada para que una MS P no reaparezca como MS G.
+    const cat = finalCategory(obj, participantCount);
+    if (cat && cat !== "SIN_CATEGORIA") row[CFG.IDX.CAT] = firestoreValueToCell(cat);
+    if (qtyOverride !== null) row[CFG.IDX.CANT] = firestoreValueToCell(qtyOverride);
     return row;
   }
 
@@ -1832,6 +1847,8 @@ async function guardarEnFlujo() {
 
   try {
     const db  = initFlujoFirebase();
+    if (!window.cuentasCobro) throw new Error("No cargó el lector de cuentas. Recarga la página antes de enviar.");
+    const soportes = await window.cuentasCobro.observaciones(año, mes, toSave);
     const col = CFG.FLUJO_COLLECTION;
     const mesNombre = monthNameEs(mes);
     const rango = last?.filtros
@@ -1849,6 +1866,7 @@ async function guardarEnFlujo() {
         año,
         mesNombre,
         rango,
+        ...(soportes[r.id] || {}),
         estado:      "pendiente",
         creadoEn:    ts,
       })
