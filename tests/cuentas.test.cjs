@@ -56,3 +56,52 @@ test('guardar cuenta y carpeta escribe en Flujo sin acceder a RIP', async () => 
   assert.equal(writes[1][0], 'configuracion');
   assert.equal(writes[1][1], 'drive_cuentas_2026-10');
 });
+
+function queueHarness(data, queued = {}) {
+  const h = harness(data); h.context.URL = URL;
+  h.context.queued = queued;
+  h.context.uploads = [];
+  h.context.authorizations = 0;
+  vm.runInContext(`
+    pendingLoaded = true;
+    for (const [key, value] of Object.entries(queued)) pendingFiles.set(key, value);
+    pendingWrite = async (key, value) => { if (value) pendingFiles.set(key, value); else pendingFiles.delete(key); };
+    driveToken = async () => { authorizations++; return 'token'; };
+    uploadFile = async (file, folder, token) => { uploads.push({ name: file.name, folder, token }); return 'https://drive.google.com/file/d/uploaded/view'; };
+  `, h.context);
+  return h;
+}
+test('envío sube solo el docente solicitado a la carpeta de su mes', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' }, '2026-10_ANA': { archivoPendiente: true } }, { '2026-10_ANA': { file: { name: 'ana.pdf' } }, '2026-09_ANA': { file: { name: 'anterior.pdf' } }, '2026-10_LUIS': { file: { name: 'luis.pdf' } } });
+  await h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana', id: 'ana' }]);
+  assert.equal(h.context.uploads.length, 1);
+  assert.equal(h.context.uploads[0].name, 'ana.pdf');
+  assert.equal(h.context.uploads[0].folder, 'https://drive.google.com/drive/folders/octubre');
+  assert.equal(h.writes[0][2].archivoPendiente, false);
+  assert.equal(h.writes[0][2].archivoUrl, 'https://drive.google.com/file/d/uploaded/view');
+});
+test('sin carpeta del mes se bloquea el envío antes de subir', async () => {
+  const h = queueHarness({}, { '2026-10_ANA': { file: { name: 'ana.pdf' } } });
+  await assert.rejects(h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana' }]), /Falta la carpeta/);
+  assert.equal(h.context.uploads.length, 0);
+  assert.equal(h.writes.length, 0);
+});
+test('adjunto marcado como pendiente en otro navegador bloquea el envío', async () => {
+  const h = queueHarness({ '2026-10_ANA': { archivoPendiente: true } });
+  await assert.rejects(h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana' }]), /Vuelve a adjuntar/);
+  assert.equal(h.writes.length, 0);
+});
+test('si falla Drive, no guarda el soporte como subido', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' } }, { '2026-10_ANA': { file: { name: 'ana.pdf' } } });
+  vm.runInContext("uploadFile = async () => { throw Error('Drive sin permisos'); };", h.context);
+  await assert.rejects(h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana' }]), /Drive sin permisos/);
+  assert.equal(h.writes.length, 0);
+  assert.equal(vm.runInContext("pendingFiles.has('2026-10_ANA')", h.context), true);
+});
+test('reintento conserva la URL y no duplica una subida ya completada', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' } }, { '2026-10_ANA': { file: { name: 'ana.pdf' }, url: 'https://drive.google.com/file/d/existing/view' } });
+  await h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana', id: 'ana' }]);
+  assert.equal(h.context.uploads.length, 0);
+  assert.equal(h.context.authorizations, 0);
+  assert.equal(h.writes[0][2].archivoUrl, 'https://drive.google.com/file/d/existing/view');
+});

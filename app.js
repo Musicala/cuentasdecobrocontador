@@ -1848,7 +1848,7 @@ async function guardarEnFlujo() {
   try {
     const db  = initFlujoFirebase();
     if (!window.cuentasCobro) throw new Error("No cargó el lector de cuentas. Recarga la página antes de enviar.");
-    const soportes = await window.cuentasCobro.observaciones(año, mes, toSave);
+    const soportes = await window.cuentasCobro.prepararEnvio(año, mes, toSave, txt => flujoSetStatus(txt, "warn"));
     const col = CFG.FLUJO_COLLECTION;
     const mesNombre = monthNameEs(mes);
     const rango = last?.filtros
