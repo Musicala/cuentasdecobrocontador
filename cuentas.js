@@ -83,12 +83,18 @@ function renderAccount(row, month) {
   if (!data) return '<span class="hint">Cargando cuenta…</span>';
   const pending = pendingFiles.get(key);
   const name = pending?.file.name || data.archivoNombre;
+  let archivoUrl = '', linkError = '';
+  if (data.archivoUrl && !pending) {
+    try { archivoUrl = driveUrl(data.archivoUrl); }
+    catch { linkError = 'El enlace guardado no es válido. Vuelve a adjuntar la cuenta para reemplazarlo.'; }
+  }
   return `<div class="flujoAccount" data-cuenta-key="${html(key)}">
     <label>Cuenta de cobro · ${html(row.docente)}
       <input type="file" accept=".pdf,.docx" data-cuenta-file ${sending || data.reading ? 'disabled' : ''}>
     </label>
     <p class="hint" role="status">${html(data.message || (name ? `Archivo: ${name}` : 'Adjunta la cuenta para enviar este docente.'))}</p>
-    ${data.archivoUrl && !pending ? `<a href="${html(driveUrl(data.archivoUrl))}" target="_blank" rel="noopener noreferrer">Ver cuenta en Drive</a>` : ''}
+    ${linkError ? `<p class="hint" role="alert">${html(linkError)}</p>` : ''}
+    ${archivoUrl ? `<a href="${html(archivoUrl)}" target="_blank" rel="noopener noreferrer">Ver cuenta en Drive</a>` : ''}
     <details><summary>Revisar observaciones de la cuenta</summary>
       <textarea data-cuenta-text rows="5" maxlength="40000" ${sending || data.reading ? 'disabled' : ''} placeholder="Texto de la cuenta y observaciones">${html(data.observaciones || '')}</textarea>
     </details>
@@ -210,6 +216,10 @@ window.cuentasCobro = {
       const pending = pendingFiles.get(pendingKey(key, row.docente));
       if (data.archivoPendiente && !pending) throw new Error(`Vuelve a adjuntar el archivo de ${row.docente} en este navegador antes de enviar.`);
       if (!pending && !data.archivoUrl) throw new Error(`Adjunta la cuenta de cobro de ${row.docente} antes de enviar.`);
+      if (!pending) {
+        try { driveUrl(data.archivoUrl); }
+        catch { throw new Error(`El enlace guardado de ${row.docente} no es válido. Vuelve a adjuntar su cuenta de cobro.`); }
+      }
       if (String(data.observaciones || '').length > 40000) throw new Error(`Las observaciones de ${row.docente} superan 40.000 caracteres.`);
     }
     let folder;

@@ -1799,6 +1799,7 @@ async function abrirDialogFlujo() {
 }
 
 async function comprobarFlujoRows(rows, año, mes) {
+  el.flujoGuardar.disabled = true;
   flujoSetStatus("Conectando con Flujo de Caja…", "warn");
   try {
     await ensureFlujoAuth();
@@ -1842,6 +1843,10 @@ async function comprobarFlujoRows(rows, año, mes) {
     el.flujoGuardar._mes  = mes;
 
   } catch (err) {
+    rows.forEach(row => { row.badge = "error"; row.estado = "Error al comprobar"; });
+    el.flujoGuardar.disabled = true;
+    // Un fallo al cargar cuentas no debe dejar la tabla en «Comprobando».
+    try { flujoRenderRows(rows); } catch { /* Conservar el error original. */ }
     flujoSetStatus("Error al comprobar: " + (err.message || err), "err");
   }
 }

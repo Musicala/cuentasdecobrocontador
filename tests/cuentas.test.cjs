@@ -40,6 +40,22 @@ test('un error de lectura impide enviar sin las observaciones', async () => {
   await assert.rejects(context.window.cuentasCobro.observaciones(2026, 10, [{ id: 'ana', docente: 'Ana' }]), /sin permisos/);
 });
 
+test('un enlace guardado inválido permite volver a adjuntar sin romper la tabla', async () => {
+  const h = harness({ '2026-10_ANA': { archivoUrl: 'javascript:alert(1)', archivoNombre: 'ana.pdf' } });
+  h.context.URL = URL;
+  await h.context.window.cuentasCobro.cargar(2026, 10, [{ docente: 'Ana' }]);
+  const markup = h.context.window.cuentasCobro.renderCuenta({ docente: 'Ana' }, '2026-10');
+  assert.match(markup, /data-cuenta-file/);
+  assert.match(markup, /El enlace guardado no es válido/);
+  assert.doesNotMatch(markup, /href=/);
+});
+
+test('un enlace inválido bloquea el envío antes de escribir cualquier cuenta', async () => {
+  const h = queueHarness({ '2026-10_ANA': { archivoUrl: 'https://example.com/ana.pdf' }, '2026-10_LUIS': { archivoUrl: 'https://drive.google.com/file/d/luis/view' } });
+  await assert.rejects(h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Luis' }, { docente: 'Ana' }]), /El enlace guardado de Ana no es válido/);
+  assert.equal(h.writes.length, 0);
+});
+
 test('guardar carpeta escribe en Flujo sin acceder a RIP', async () => {
   const { context, writes, elements } = harness(); context.URL = URL;
   elements.get('#driveMes').value = '2026-10';
