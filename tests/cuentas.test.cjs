@@ -147,3 +147,34 @@ test('el selector de archivos vive dentro de Flujo y lee Word sin guardar aparte
   assert.match(markup, /Servicios del docente/);
   assert.doesNotMatch(fs.readFileSync('index.html', 'utf8'), /id="btnCuentas"/);
 });
+
+test('acepta soportes de Google Docs y rechaza dominios parecidos', () => {
+  const h = harness(); h.context.URL = URL;
+  for (const url of ['https://docs.google.com/document/d/abc/edit', 'https://docs.google.com/file/d/abc/view']) {
+    h.context.input = url;
+    assert.equal(vm.runInContext('driveUrl(input)', h.context), url);
+    assert.throws(() => vm.runInContext('driveUrl(input, true)', h.context));
+  }
+  for (const url of ['https://docs.google.com.evil.org/document/d/abc/edit', 'https://docs.google.com/forms/d/abc/edit', 'http://docs.google.com/document/d/abc/edit']) {
+    h.context.input = url;
+    assert.throws(() => vm.runInContext('driveUrl(input)', h.context));
+  }
+});
+
+test('una subida Word con enlace Google Docs se guarda y se puede reintentar', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' } }, { '2026-10_ANA': { file: { name: 'ana.docx' } } });
+  vm.runInContext("uploadFile = async () => 'https://docs.google.com/document/d/word/edit';", h.context);
+  const rows = [{ docente: 'Ana', id: 'ana' }];
+  const result = await h.context.window.cuentasCobro.prepararEnvio(2026, 10, rows);
+  assert.equal(result.ana.cuentaCobroUrl, 'https://docs.google.com/document/d/word/edit');
+  const retry = await h.context.window.cuentasCobro.prepararEnvio(2026, 10, rows);
+  assert.equal(retry.ana.cuentaCobroUrl, result.ana.cuentaCobroUrl);
+});
+
+test('recupera un adjunto con URL local antigua y sube el archivo', async () => {
+  const h = queueHarness({ 'drive_cuentas_2026-10': { url: 'https://drive.google.com/drive/folders/octubre' } }, { '2026-10_ANA': { file: { name: 'ana.docx' }, url: 'blob:https://musicala.github.io/old' } });
+  const result = await h.context.window.cuentasCobro.prepararEnvio(2026, 10, [{ docente: 'Ana', id: 'ana' }]);
+  assert.equal(h.context.uploads.length, 1);
+  assert.equal(h.context.authorizations, 1);
+  assert.equal(result.ana.cuentaCobroUrl, 'https://drive.google.com/file/d/uploaded/view');
+});

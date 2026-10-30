@@ -45,7 +45,9 @@ document.body.append(settings);
 function driveUrl(value, folder = false) {
   if (!value.trim()) return '';
   const url = new URL(value);
-  if (url.protocol !== 'https:' || url.hostname !== 'drive.google.com' || (folder && !/\/folders\/[\w-]+/.test(url.pathname))) throw new Error(folder ? 'Usa el enlace de una carpeta de Google Drive.' : 'Usa un enlace HTTPS de Google Drive.');
+  const drive = url.hostname === 'drive.google.com';
+  const docs = url.hostname === 'docs.google.com' && /^\/(document|spreadsheets|presentation|file)\/(?:u\/\d+\/)?d\/[\w-]+(?:\/|$)/.test(url.pathname);
+  if (url.protocol !== 'https:' || url.username || url.password || (folder ? !drive || !/\/folders\/[\w-]+/.test(url.pathname) : !drive && !docs)) throw new Error(folder ? 'Usa el enlace de una carpeta de Google Drive.' : 'Usa un enlace HTTPS de Google Drive o Google Docs.');
   return url.href;
 }
 function folderId(url) { return new URL(driveUrl(url, true)).pathname.match(/\/folders\/([\w-]+)/)[1]; }
@@ -208,6 +210,15 @@ window.cuentasCobro = {
     if (!pendingLoaded) throw new Error('Espera un momento mientras cargan los adjuntos y vuelve a enviar.');
     const key = `${year}-${String(month).padStart(2, '0')}`;
     const queued = rows.filter(row => pendingFiles.has(pendingKey(key, row.docente)));
+    // Las versiones antiguas podían conservar una URL local en la cola.
+    // El archivo sigue disponible: subirlo de nuevo en lugar de reutilizar esa URL.
+    for (const row of queued) {
+      const id = pendingKey(key, row.docente), pending = pendingFiles.get(id);
+      if (pending.url) {
+        try { pending.url = driveUrl(pending.url); }
+        catch { await pendingWrite(id, { file: pending.file }); }
+      }
+    }
     // Iniciar autorización desde el clic de Guardar en Flujo, antes de leer Firestore.
     const token = queued.some(row => !pendingFiles.get(pendingKey(key, row.docente)).url) ? await driveToken() : null;
     await ensureFlujoAuth();
@@ -237,7 +248,7 @@ window.cuentasCobro = {
       }
       progress(`Subiendo cuenta de ${row.docente} a Drive…`);
       if (!pending.url) {
-        pending.url = await uploadFile(pending.file, folder, token, `${key} - ${row.docente} - ${pending.file.name}`);
+        pending.url = driveUrl(await uploadFile(pending.file, folder, token, `${key} - ${row.docente} - ${pending.file.name}`));
         // Conservar el resultado antes de guardar en Firestore para reintentar sin duplicar.
         await pendingWrite(id, pending);
       }
